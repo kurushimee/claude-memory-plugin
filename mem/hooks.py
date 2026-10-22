@@ -1,10 +1,9 @@
-import json
 import re
 
 from . import git, index, vault
 
-CAP = 7000
 BUDGET = {"feedback": 6000, "leftovers": 2500, "notes": 3000}
+TOOL_KEYS = ("file_path", "path", "pattern", "command", "glob", "notebook_path")
 POINTER = (
     "the memory skill holds the policy, load it when in doubt. save with memory_save or mem save, "
     "search with memory_search or mem search, open a note with memory_show or mem show <slug>"
@@ -41,27 +40,38 @@ def section(db, rows, budget, extra=lambda r: ""):
     return out, shown
 
 
+def belongs(row, project):
+    """the brief carries only what fits any task here, the project's own notes and notes tagged always"""
+    if "always" in (row["tags"] or "").split() or row["project"] != "global":
+        return True
+    return project == "global" and row["type"] == "leftovers"
+
+
+GROUPS = (
+    ("how to work, from feedback, newest first, the rest as titles", ("feedback",), "feedback"),
+    ("open leftovers", ("leftovers",), "leftovers"),
+    ("notes, the rest as titles, open with mem show <slug>", ("facts", "projects"), "notes"),
+)
+
+
+def sections(db, rows):
+    out, shown = [], []
+    for header, types, budget in GROUPS:
+        part = [r for r in rows if r["type"] in types][:40]
+        if not part:
+            continue
+        extra = (lambda r: f"\nopen for {index.days_ago(r['created'])}d") if budget == "leftovers" else (lambda r: "")
+        blocks, slugs = section(db, part, BUDGET[budget], extra)
+        out += [header, *blocks]
+        shown += slugs
+    return out, shown
+
+
 def brief_text(db, project, session="", agent="", source="startup", is_sub=False):
-    out = [f"memory brief for {project}"]
-    shown = []
-    feedback = safe(index.list_notes, db, project, ("feedback",), 40, default=[])
-    if feedback:
-        blocks, slugs = section(db, feedback, BUDGET["feedback"])
-        out.append("how to work, from feedback, newest first, the rest as titles")
-        out += blocks
-        shown += slugs
-    leftovers = safe(index.list_notes, db, project, ("leftovers",), 40, default=[])
-    if leftovers:
-        blocks, slugs = section(db, leftovers, BUDGET["leftovers"], lambda r: f"\nopen for {index.days_ago(r['created'])}d")
-        out.append("open leftovers")
-        out += blocks
-        shown += slugs
-    notes = safe(index.list_notes, db, project, ("facts", "projects"), 30, default=[])
-    if notes:
-        blocks, slugs = section(db, notes, BUDGET["notes"])
-        out.append("project and global notes, the rest as titles, open with mem show <slug>")
-        out += blocks
-        shown += slugs
+    seen = safe(index.injected_slugs, db, session, agent, default=set()) if source == "resume" else set()
+    rows = [r for r in safe(index.list_notes, db, project, None, 500, default=[]) if belongs(r, project) and r["slug"] not in seen]
+    blocks, shown = sections(db, rows)
+    out = [f"memory brief for {project}", *blocks]
     if source == "compact" and session:
         before = safe(index.before_compaction, db, session, agent, default=[])
         if before:
@@ -95,54 +105,60 @@ def brief(payload):
     return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
 
 
-def keywords(tool_input):
-    parts = [v for k, v in tool_input.items() if isinstance(v, str) and k in ("file_path", "path", "pattern", "command", "glob", "notebook_path")]
-    words = re.findall(r"[a-z0-9.]{3,}", re.sub(r"[\\/_-]", " ", " ".join(parts).lower()))
-    seen = []
-    for w in words:
-        w = w.rsplit(".", 1)[0] if "." in w[1:] else w
-        if len(w) >= 3 and w not in index.STOP and w not in seen:
-            seen.append(w)
-    return " ".join(seen[:12])
+def tool_text(name, tool_input):
+    parts = [v[:300] for k, v in tool_input.items() if isinstance(v, str) and k in TOOL_KEYS]
+    return " ".join([name, *parts])
 
 
-def touches_memory(tool_input):
-    blob = json.dumps(tool_input).replace("\\\\", "/")
-    return "mem " in blob or "mem.exe" in blob or "memory_" in blob or vault.vault_path().as_posix() in blob
+def touches_memory(text):
+    if re.search(r"\bmem(\.exe)? |memory_", text):
+        return True
+    home = vault.vault_path().as_posix()
+    return any(vault.in_scope(home, p) for p in vault.paths_in(text))
+
+
+def entered(db, project, text, seen, reached):
+    """notes of folders a path leads into that the session's own brief did not carry and no earlier call brought"""
+    rows = {}
+    for place in {vault.project_of(p) for p in vault.paths_in(text)} - {project, "global"}:
+        for r in index.list_notes(db, place, None, 500):
+            if r["project"] in reached or r["project"] == "global" or vault.in_scope(r["project"], project):
+                continue
+            if r["slug"] not in seen:
+                rows[r["slug"]] = r
+    return list(rows.values())
 
 
 def recall(payload):
+    """notes come in by scope only, a folder's notes the first time the session reaches it. matching by meaning
+    let unrelated notes through on every model tried, so finding notes by topic is left to memory_search"""
     event = payload.get("hook_event_name", "")
     session = payload.get("session_id", "")
     agent = payload.get("agent_id") or ""
     project = vault.project_of(payload.get("cwd", ""))
     if event == "UserPromptSubmit":
-        db = index.connect(vec=True)
-        safe(index.index, db)
-        hits, maybe = index.search(db, payload.get("prompt", ""), project=project, k=3, fts_max=index.FTS_MAX_PROMPT)
-        source, cap = "prompt", 3
+        source, text = "prompt", payload.get("prompt", "")
     else:
-        tool_input = payload.get("tool_input") or {}
-        if touches_memory(tool_input):
+        source, text = "tool", tool_text(payload.get("tool_name", ""), payload.get("tool_input") or {})
+        if touches_memory(text):
             return None
-        query = keywords(tool_input)
-        if not query:
+    db = index.connect(vec=source == "prompt")
+    if source == "prompt":
+        safe(index.index, db)
+        db.commit()
+    try:
+        db.execute("begin immediate")
+        rows = entered(db, project, text, index.injected_slugs(db, session, agent), index.reached_projects(db, session, agent))
+        if not rows:
             return None
-        db = index.connect(vec=False)
-        hits, maybe = index.search(db, query, project=project, k=1, vector=False)
-        source, cap = "tool", 1
-    seen = index.injected_slugs(db, session, agent)
-    hits = [r for r in hits if r["slug"] not in seen][:cap]
-    picked = {r["slug"] for r in hits}
-    maybe = [r for r in maybe if r["slug"] not in seen and r["slug"] not in picked][:5]
-    if not hits and not maybe:
-        return None
-    out = [f"memory recall, {len(hits)} notes"] + [block(db, r) for r in hits]
-    if maybe:
-        out.append("maybe relevant, open with mem show <slug>")
-        out += [line(r) for r in maybe]
-    index.record_injected(db, session, agent, [r["slug"] for r in hits], source)
-    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": "\n\n".join(out)[:CAP]}}
+        places = sorted({r["project"] for r in rows})
+        blocks, shown = sections(db, rows)
+        index.record_reached(db, session, agent, places)
+        index.record_injected(db, session, agent, shown, source)
+    finally:
+        db.commit()
+    context = "\n\n".join([f"memory for {', '.join(places)}, this session just reached it", *blocks])
+    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": context}}
 
 
 def compacted(payload):

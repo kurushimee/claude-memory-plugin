@@ -43,15 +43,23 @@ assert bare_env.stdout.strip() == "", f"heavy imports at start: {bare_env.stdout
 godot = cli.save_note("facts", "godot runs must end themselves", "every godot run started for a test has to exit on its own, see [[one-gpu-job-at-a-time]]", ["godot", "testing"], [], project)
 gpu = cli.save_note("facts", "one gpu job at a time", "never start two gpu jobs at once on the 2070", ["gpu"], [], project)
 left = cli.save_note("leftovers", "finish the cascade probe debug view", "the probe view in radiance-cascades is half done, next step is wiring the toggle", [], [], project)
-fb = cli.save_note("feedback", "prompt length says nothing about effort", "a two word prompt can carry the biggest job of the day", ["effort"], [], "global")
+fb = cli.save_note("feedback", "prompt length says nothing about effort", "a two word prompt can carry the biggest job of the day", ["always", "effort"], [], "global")
+ghidra = cli.save_note("facts", "ghidra lives in the tools folder", "ghidra 12 sits at F:/tools/ghidra and rea is wired to it", ["reference"], [], "global")
+elsewhere = tmp / "elsewhere"
+elsewhere.mkdir()
+away = cli.save_note("facts", "the elsewhere build needs ninja", "the elsewhere folder only builds with ninja on the path", ["build"], [], elsewhere.as_posix())
 assert godot.path.exists() and godot.path.read_text(encoding="utf-8").startswith("---\ntitle: godot runs")
 assert vault.read_note(godot.path).links == ["one-gpu-job-at-a-time"]
 
 db = index.connect(vec=True)
 assert index.index(db) == ([], set())
-assert db.execute("select count(*) from notes").fetchone()[0] == 4
+assert db.execute("select count(*) from notes").fetchone()[0] == 6
 assert index.embed(["check"]) is not None, "embedder unavailable, the vector checks need the model cached"
-assert db.execute("select count(*) from vec").fetchone()[0] == 4
+assert db.execute("select count(*) from vec").fetchone()[0] == 6
+
+assert vault.project_of(str(elsewhere / "src")) == (elsewhere / "src").as_posix() and vault.project_of(str(Path.home())) == "global"
+assert vault.in_scope(elsewhere.as_posix(), (elsewhere / "src").as_posix()) and not vault.in_scope(elsewhere.as_posix(), elsewhere.as_posix() + "2")
+assert list(vault.paths_in("cd /f/x && cat src/a/b https://e.com/a/b")) == ["F:/x"]
 
 hits, maybe = index.search(db, "casca", project=project, vector=False)
 assert left.slug in [r["slug"] for r in hits + maybe], "trigram miss"
@@ -63,25 +71,29 @@ assert not hits or all(r["type"] == "leftovers" for r in hits)
 listed = index.list_notes(db, project, ("leftovers",))
 assert [r["slug"] for r in listed] == [left.slug]
 
-prompt = {"hook_event_name": "UserPromptSubmit", "session_id": "s1", "cwd": project, "prompt": "godot keeps hanging in the tests"}
+prompt = {"hook_event_name": "UserPromptSubmit", "session_id": "s0", "cwd": project, "prompt": f"why does {elsewhere} fail to build"}
 first = hooks.recall(prompt)["hookSpecificOutput"]["additionalContext"]
-assert "godot runs must end themselves" in first and "maybe relevant" in first, first
-second = hooks.recall(prompt)
-assert second is None or "## godot runs" not in second["hookSpecificOutput"]["additionalContext"]
-hooks.compacted({"session_id": "s1"})
-third = hooks.recall(prompt)["hookSpecificOutput"]["additionalContext"]
-assert "godot runs must end themselves" in third
+assert away.title in first and godot.title not in first and ghidra.title not in first, first
+assert hooks.recall(prompt) is None, "entered twice"
+hooks.compacted({"session_id": "s0"})
+assert away.title in hooks.recall(prompt)["hookSpecificOutput"]["additionalContext"], "not entered again after compaction"
+assert hooks.recall({**prompt, "prompt": "godot keeps hanging when a test run never exits"}) is None, "prompts match by scope only"
+assert hooks.recall({**prompt, "prompt": "what is it?"}) is None
 
-tool = {"hook_event_name": "PostToolUse", "session_id": "s1", "cwd": project, "tool_name": "Read", "tool_input": {"file_path": "F:/proj/src/cascade_probe.gd"}}
-assert hooks.keywords(tool["tool_input"]) == "proj cascade probe"
+tool = {"hook_event_name": "PostToolUse", "session_id": "s1", "cwd": project, "tool_name": "Read", "tool_input": {"file_path": f"{elsewhere}/src/main.cpp"}}
 got = hooks.recall(tool)["hookSpecificOutput"]["additionalContext"]
-assert left.slug in got, got
+assert "this session just reached it" in got and away.title in got and godot.title not in got, got
+assert hooks.recall({**tool, "tool_input": {"command": f"cat {elsewhere.as_posix()}/README.md"}}) is None, "entered twice"
+assert hooks.recall({**tool, "tool_input": {"command": "grep -rn godot hanging tests"}}) is None, "tool calls match by scope only"
 assert hooks.recall({**tool, "tool_input": {"command": "mem save --type facts --title x"}}) is None
 assert hooks.recall({**tool, "tool_input": {"file_path": f"{project}/facts/x.md"}}) is None
 
 start = {"hook_event_name": "SessionStart", "session_id": "s2", "source": "startup", "cwd": project}
 text = hooks.brief(start)["hookSpecificOutput"]["additionalContext"]
 assert "how to work" in text and fb.title in text and "open leftovers" in text and left.title in text and "health:" in text, text
+assert ghidra.title not in text and away.title not in text, "the brief carries only the project and always notes"
+resumed = hooks.brief({**start, "source": "resume"})["hookSpecificOutput"]["additionalContext"]
+assert fb.title not in resumed and left.title not in resumed, resumed
 sub = hooks.brief({**start, "hook_event_name": "SubagentStart", "agent_id": "a1"})["hookSpecificOutput"]["additionalContext"]
 assert "health:" not in sub and left.title in sub
 after = hooks.brief({**start, "source": "compact"})["hookSpecificOutput"]["additionalContext"]
@@ -115,7 +127,7 @@ assert sh("git", "-C", str(vault_dir), "status", "--porcelain").stdout.strip() =
 assert "merge remote" in sh("git", "-C", str(bare), "log", "--oneline", "main").stdout
 
 report = cli.check_report()
-assert report["notes"] == report["indexed"] == 4 and report["health"]["conflicts"] == 1, (report["health"], report["log_tail"])
+assert report["notes"] == report["indexed"] == 6 and report["health"]["conflicts"] == 1, (report["health"], report["log_tail"])
 pane = cli.pane("s2", project)
 assert set(pane) == {"project", "vault", "health", "leftovers", "injected", "counts"} and pane["counts"]["recalled"] > 0
 json.dumps(pane)
@@ -127,6 +139,16 @@ lines = text.splitlines()
 assert "health:" in text and "open leftovers" in text, text[-300:]
 assert all(f"(stress-note-{i})" in text for i in range(12))
 assert 0 < len(shown) < 13 and all(any(l.startswith("## ") and f"({s})" in l for l in lines) for s in shown), shown
+
+from mem import mcp_server  # noqa: E402
+
+settings = tmp / "Claude-Data" / "app" / "Claude Extensions Settings"
+settings.mkdir(parents=True)
+(settings / f"{mcp_server.EXTENSION}.json").write_text('{"isEnabled": true}')
+os.environ.update(LOCALAPPDATA=str(tmp), CLAUDE_CODE_ENTRYPOINT="claude-desktop")
+assert mcp_server.extension_covers()
+os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
+assert not mcp_server.extension_covers()
 
 db.close()
 shutil.rmtree(tmp, ignore_errors=True)

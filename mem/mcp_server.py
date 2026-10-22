@@ -1,6 +1,12 @@
+import json
+import os
+from pathlib import Path
+
 from mcp.server import MCPServer
 
 from . import cli, hooks, index, vault
+
+EXTENSION = "local.mcpb.kurushimee.memory"
 
 mcp = MCPServer(
     "memory",
@@ -30,7 +36,7 @@ def memory_search(query: str, project: str | None = None, type: str | None = Non
     """hybrid search over the vault by words and by meaning. hits come with their body, a maybe list follows with titles worth opening. type is one of facts, feedback, projects, leftovers"""
     db = index.connect(vec=True)
     index.index(db)
-    hits, maybe = index.search(db, query, project=project, type=type, k=k, fts_max=index.FTS_MAX_SEARCH)
+    hits, maybe = index.search(db, query, project=project, type=type, k=k)
     return cli.render_search(db, hits, maybe)
 
 
@@ -70,5 +76,14 @@ def memory_check() -> str:
     return cli.render_check(cli.check_report())
 
 
+def extension_covers():
+    """the desktop app hands its own memory extension to code tab sessions, the plugin's copy would double every tool"""
+    appdata = os.environ.get("LOCALAPPDATA")
+    if os.environ.get("CLAUDE_CODE_ENTRYPOINT") != "claude-desktop" or not appdata:
+        return False
+    found = Path(appdata).glob(f"Claude-Data/*/Claude Extensions Settings/{EXTENSION}.json")
+    return any(json.loads(p.read_text(encoding="utf-8")).get("isEnabled") for p in found)
+
+
 def serve():
-    mcp.run()
+    (MCPServer("memory") if extension_covers() else mcp).run()

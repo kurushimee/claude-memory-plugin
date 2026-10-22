@@ -9,9 +9,7 @@ from . import vault
 
 DIM = 384
 VEC_MAX = 0.36
-FTS_MAX = -5.0
-FTS_MAX_PROMPT = -8.0
-FTS_MAX_SEARCH = -2.0
+FTS_MAX = -2.0
 RRF_K = 60
 STALE_DAYS = 90
 OLD_LEFTOVER_DAYS = 30
@@ -34,6 +32,7 @@ create table if not exists notes(
   injected integer default 0, last_injected text);
 create virtual table if not exists fts using fts5(slug unindexed, title, body, tags, links, tokenize='trigram');
 create table if not exists injected(session_id text, agent_id text, slug text, source text, at text, compacted_at text);
+create table if not exists reached(session_id text, agent_id text, project text, at text, compacted_at text);
 """
 VEC_SCHEMA = f"create virtual table if not exists vec using vec0(slug text primary key, embedding float[{DIM}] distance_metric=cosine)"
 
@@ -184,7 +183,7 @@ def fts_query(text):
     return " OR ".join('"' + t.replace('"', "") + '"' for t in tokens(text))
 
 
-def search(db, query, project=None, type=None, k=8, vector=True, fts_max=FTS_MAX):
+def search(db, query, project=None, type=None, k=8, vector=True):
     cands = defaultdict(dict)
     q = fts_query(query)
     if q:
@@ -212,7 +211,7 @@ def search(db, query, project=None, type=None, k=8, vector=True, fts_max=FTS_MAX
         if row is None:
             continue
         c = cands[slug]
-        is_hit = c.get("vec", 9) <= VEC_MAX or c.get("fts", 0) <= fts_max
+        is_hit = c.get("vec", 9) <= VEC_MAX or c.get("fts", 0) <= FTS_MAX
         (hits if is_hit and len(hits) < k else maybe).append(row)
     linked = linked_rows(db, hits[:3], {r["slug"] for r in hits + maybe}, project)
     return hits, (linked + maybe)[:5]
@@ -222,7 +221,7 @@ def note_row(db, slug, project=None, type=None):
     row = db.execute("select * from notes where slug=? and status='active'", (slug,)).fetchone()
     if row is None:
         return None
-    if project and row["project"] not in (project, "global"):
+    if project and not vault.in_scope(row["project"], project):
         return None
     if type and row["type"] != type:
         return None
@@ -245,15 +244,11 @@ def linked_rows(db, rows, skip, project):
 def list_notes(db, project=None, types=None, k=20, status="active"):
     sql = "select * from notes where status=?"
     args = [status]
-    if project:
-        sql += " and project in (?, 'global')"
-        args.append(project)
     if types:
         sql += " and type in (" + ",".join("?" * len(types)) + ")"
         args += list(types)
-    sql += " order by updated desc, created desc limit ?"
-    args.append(k)
-    return db.execute(sql, args).fetchall()
+    rows = db.execute(sql + " order by updated desc, created desc", args).fetchall()
+    return [r for r in rows if not project or vault.in_scope(r["project"], project)][:k]
 
 
 def body_of(db, slug):
@@ -271,8 +266,8 @@ def injected_slugs(db, session, agent):
 
 def injected_rows(db, session):
     return db.execute(
-        """select i.slug, i.source, i.at, n.title, n.path from injected i join notes n using(slug)
-           where i.session_id=? order by i.at desc""",
+        """select i.slug, i.source, max(i.at) as at, n.title, n.path from injected i join notes n using(slug)
+           where i.session_id=? group by i.slug order by at desc""",
         (session,),
     ).fetchall()
 
@@ -288,12 +283,27 @@ def record_injected(db, session, agent, slugs, source):
     db.commit()
 
 
+def reached_projects(db, session, agent):
+    rows = db.execute(
+        "select project from reached where session_id=? and coalesce(agent_id,'')=? and compacted_at is null",
+        (session, agent or ""),
+    )
+    return {r[0] for r in rows}
+
+
+def record_reached(db, session, agent, projects):
+    now = datetime.now().isoformat(timespec="seconds")
+    for p in projects:
+        db.execute("insert into reached(session_id, agent_id, project, at) values(?,?,?,?)", (session, agent or None, p, now))
+
+
 def stamp_compacted(db, session, agent):
     now = datetime.now().isoformat(timespec="seconds")
-    db.execute(
-        "update injected set compacted_at=? where session_id=? and coalesce(agent_id,'')=? and compacted_at is null",
-        (now, session, agent or ""),
-    )
+    for table in ("injected", "reached"):
+        db.execute(
+            f"update {table} set compacted_at=? where session_id=? and coalesce(agent_id,'')=? and compacted_at is null",
+            (now, session, agent or ""),
+        )
     db.commit()
 
 

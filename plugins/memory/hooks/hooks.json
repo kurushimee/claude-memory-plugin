@@ -3,7 +3,7 @@
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "mem", "args": ["brief"], "timeout": 30 }] }],
     "SubagentStart": [{ "hooks": [{ "type": "command", "command": "mem", "args": ["brief"], "timeout": 30 }] }],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "mem", "args": ["recall"], "timeout": 15 }] }],
-    "PostToolUse": [{ "matcher": "Read|Edit|Write|Grep|Glob|Bash", "hooks": [{ "type": "command", "command": "mem", "args": ["recall"], "timeout": 5 }] }],
+    "PostToolUse": [{ "matcher": "Read|Edit|Write|Grep|Glob|Bash", "hooks": [{ "type": "command", "command": "mem", "args": ["recall"], "async": true }] }],
     "PostCompact": [{ "hooks": [{ "type": "command", "command": "mem", "args": ["compacted"], "timeout": 5 }] }]
   }
 }

@@ -46,13 +46,33 @@ def slugify(title):
 
 
 def project_of(cwd):
+    """the git root above cwd, else cwd itself"""
     if not cwd or "scratch-workspaces" in cwd:
         return "global"
     p = Path(cwd)
     for d in (p, *p.parents):
         if (d / ".git").exists():
             return d.as_posix()
-    return "global"
+    if p == Path.home() or p.parent == p:
+        return "global"
+    return p.as_posix()
+
+
+def in_scope(note_project, project):
+    """a note covers its folder and everything under it"""
+    if note_project == "global":
+        return True
+    return (project.lower().rstrip("/") + "/").startswith(note_project.lower().rstrip("/") + "/")
+
+
+PATH = re.compile(r"(?:(?<![A-Za-z])[A-Za-z]:[\\/]|(?<![\w.~/-])/[a-zA-Z]/)[^\s\"'`|;&<>()]*")
+
+
+def paths_in(text):
+    """windows paths and their git bash spelling like /f/x, as F:/x"""
+    for p in PATH.findall(text):
+        p = p.replace("\\", "/")
+        yield p[1].upper() + ":" + p[2:] if p[0] == "/" else p
 
 
 @dataclass

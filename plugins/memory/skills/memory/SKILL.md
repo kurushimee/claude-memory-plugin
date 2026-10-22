@@ -5,7 +5,7 @@ description: Claude's own memory, an Obsidian vault of notes with search, remind
 
 # Memory
 
-The vault at `F:\claude-memory` (a private GitHub repo, `kurushimee/claude-memory`) holds one note per file in four folders, `facts`, `feedback`, `projects` and `leftovers`. The `mem` command indexes it and syncs it with GitHub, hooks push notes into Code and local Cowork sessions, and the `memory_*` MCP tools give the same memory as tools, listed as `mcp__plugin_memory_memory__memory_*` and loaded with ToolSearch when they show as deferred. Prefer the tools when they are listed, fall back to `mem` through Bash, and in a session with neither, see Working without hooks below.
+The vault at `F:\claude-memory` (a private GitHub repo, `kurushimee/claude-memory`) holds one note per file in four folders, `facts`, `feedback`, `projects` and `leftovers`. The `mem` command indexes it and syncs it with GitHub, hooks push notes into Code and local Cowork sessions, and the `memory_*` MCP tools give the same memory as tools, listed as `mcp__Memory__memory_*` in the desktop app (the Memory extension) and `mcp__plugin_memory_memory__memory_*` in a terminal session, and loaded with ToolSearch when they show as deferred. Prefer the tools when they are listed, fall back to `mem` through Bash, and in a session with neither, see Working without hooks below.
 
 ## The point
 
@@ -17,12 +17,12 @@ Notes are written in the tumblr voice in full, the same as chat output. All lowe
 
 ## The learning loop
 
-- A correction from the user is a `feedback` note the moment it lands. Say what was wrong, what is right, and the situation it applies to, and tag it so recall finds it when that situation comes back. Feedback for global and the project is the first thing in every brief, so a correction changes the next session, not only this one.
+- A correction from the user is a `feedback` note the moment it lands. Say what was wrong, what is right, and the situation it applies to, and tag it with words that name that situation so a search finds it when the situation comes back. The project's feedback and every feedback note tagged `always` are the first thing in every brief, so a correction that fits every task gets `always` and changes the next session, not only this one.
 - A lesson you draw yourself goes the same way. Something you did that you would do differently, a way of working that turned out better, a thing that cost time.
 - At every natural end of a task, and at the latest when calling `wrap_up`, ask three things. What did the user correct. What would I do differently. What is left open. Each answer is a note or nothing.
 - Lessons about memory itself go in the Lessons section at the bottom of this file. A save that turned out to be noise, a recall that was useless, a search that missed and why, the user saying "I told you this before". When a lesson is clear enough, edit the policy above it in place, commit and push `F:\claude-memory-plugin`.
 - The cleanup pass reads the feedback notes together. Ones that keep coming back get merged into one stronger note or promoted into this policy. Ones contradicted by newer feedback get retired with `memory_forget`. The health line counts corrections from the last seven days so you can see your own rate.
-- Gaps in the system itself get fixed when they show up. A missing command, a cut off that is clearly off, a keyword rule that misses a kind of input, these are a few lines in `F:\claude-memory-plugin`, fixed in session with `uv run python tests/check.py` passing, committed and pushed. A change under `plugins/` also bumps that plugin's version in its `plugin.json`, installed copies only refresh on a new version. Anything bigger becomes a leftover tagged `memory`.
+- Gaps in the system itself get fixed when they show up. A missing command, a search cut off that is clearly off, a path form the scope rules miss, these are a few lines in `F:\claude-memory-plugin`, fixed in session with `uv run python tests/check.py` passing, committed and pushed. A change under `plugins/` also bumps that plugin's version in its `plugin.json`, installed copies only refresh on a new version. Anything bigger becomes a leftover tagged `memory`.
 
 ## Searching during a task
 
@@ -34,7 +34,7 @@ Search whenever the question "did I know something about this" comes up. That is
 - when the user refers to something from before
 - before writing a subagent brief, and paste the hits into that brief
 
-`memory_search` (or `mem search <query>`) matches by parts of words and by meaning, so describe the thing rather than guessing exact words. Every answer has hits with bodies and a maybe list of titles. Open a maybe with `memory_show` (`mem show <slug>`) when the title looks like it matters. The hooks only catch what their keywords happen to match, so they never replace searching yourself.
+`memory_search` (or `mem search <query>`) matches by parts of words and by meaning, so describe the thing rather than guessing exact words. Every answer has hits with bodies and a maybe list of titles. Open a maybe with `memory_show` (`mem show <slug>`) when the title looks like it matters. The hooks bring notes by scope only and never by topic, so a global note without `always` reaches the context only through a search.
 
 ## Saving
 
@@ -56,7 +56,7 @@ A leftover is an open thread, unfinished work, something to come back to. Write 
 
 ## Writing a note
 
-One fact per note, short, in the voice above. The type is the folder. The slug comes from the title. Tags are a few words that name the situation (`godot`, `testing`, `review`, `writing`). Links are slugs of related notes, written as `[[slug]]` in the body or passed as `links`, so Obsidian draws the graph and search follows them one hop. The project is the git root of where the note applies, like `F:/radiance-cascades`, or `global` for anything about the user or the machine. To change a note, edit the file or save again with the same title, `mem index` picks it up on the next hook and commits it.
+One fact per note, short, in the voice above. The type is the folder. The slug comes from the title. Tags are a few words that name the situation (`godot`, `testing`, `review`, `writing`). Links are slugs of related notes, written as `[[slug]]` in the body or passed as `links`, so Obsidian draws the graph and search follows them one hop. The project is the git root of where the note applies, or the folder itself when it has no git, like `F:/radiance-cascades`, or `global` for anything about the user or the machine. A note covers its folder and everything under it. The brief at session start carries only the project's own notes and notes tagged `always`, so tag `always` only what fits every task in its scope. The notes of another folder come in once, the first time a prompt or tool call reaches a path in it, and again after a squash. To change a note, edit the file or save again with the same title, `mem index` picks it up on the next hook and commits it.
 
 ## The cleanup pass
 
@@ -69,7 +69,7 @@ Read the health line in the brief. Do a pass when it shows hook errors, dupe pai
 5. Verify or forget each stale candidate.
 6. Read the feedback notes together, merge, promote or retire as in the learning loop.
 7. Read `mem log`, fix the cause of each error in `F:\claude-memory-plugin`, run `uv run python tests/check.py`.
-8. When recall has been noisy or missed things, `uv run python tests/tune.py` prints what the cut offs in `mem/index.py` inject for sample prompts and tool inputs. Add the case that went wrong to the samples, move the cut offs, keep the samples that still read right.
+8. Add each injection that brought an unrelated note, and each note a search had to find that should have come in by itself, to `system/recall-eval.jsonl` in the vault. Those labeled cases are the test any future recall by meaning has to pass with zero unrelated notes let through.
 9. Once a month, `uv lock --upgrade` in `F:\claude-memory-plugin` and the check again.
 10. `claude plugin validate` on `plugins/memory` and `plugins/memory-pane`, `claude plugin test` on the pane, fix what they report.
 11. Re-read this skill and tighten it.
@@ -97,3 +97,5 @@ If the clone is not possible either, say so once and go on.
 
 - The length of a prompt says nothing about the effort the task behind it needs. A two word prompt can carry the biggest job of the day. Never scale attention, search or care by how much the user typed.
 - A flat character cap on the brief cut it mid word in a project with ten long feedback notes, so the leftovers and the health line never arrived, and the cut notes still counted as injected, so recall never brought them back. Each section now has its own budget and only a note whose body is in the text counts as shown. Whatever is cut has to fail loud, in the health line or as titles, never silently.
+- Over 231 labeled real cases, recall by keywords and vectors let 67 unrelated notes in on prompts and 42 on tool calls. Small local cross encoders (MiniLM, Jina turbo, Qwen3 0.6B) could only reach zero unrelated notes with a gate so strict that almost nothing related came through, and tool call text carried too little meaning for any of them. Recall became scope only, and finding notes by topic is a search you make yourself.
+- `mem` is an editable install of `F:\claude-memory-plugin`, so every saved edit runs in the live hooks at once and a half done edit throws in `mem log`. Make multi file changes in a few quick edits and clear the errors they leave once the check passes.
