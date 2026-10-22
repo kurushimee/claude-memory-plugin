@@ -1,0 +1,334 @@
+import hashlib
+import re
+import sqlite3
+from collections import defaultdict
+from datetime import date, datetime
+
+from . import vault
+
+DIM = 384
+VEC_MAX = 0.42
+FTS_MAX = -2.0
+RRF_K = 60
+STALE_DAYS = 90
+OLD_LEFTOVER_DAYS = 30
+DUPE_SIM = 0.92
+
+SCHEMA = """
+create table if not exists notes(
+  slug text primary key, path text, type text, project text, status text, title text,
+  tags text, created text, updated text, hash text, mtime real,
+  injected integer default 0, last_injected text);
+create virtual table if not exists fts using fts5(slug unindexed, title, body, tags, links, tokenize='trigram');
+create table if not exists injected(session_id text, agent_id text, slug text, source text, at text, compacted_at text);
+"""
+VEC_SCHEMA = f"create virtual table if not exists vec using vec0(slug text primary key, embedding float[{DIM}] distance_metric=cosine)"
+
+
+def connect(vec=False):
+    db = sqlite3.connect(vault.mem_dir() / "index.sqlite", timeout=10)
+    db.execute("pragma journal_mode=wal")
+    db.executescript(SCHEMA)
+    if vec:
+        import sqlite_vec
+
+        db.enable_load_extension(True)
+        sqlite_vec.load(db)
+        db.enable_load_extension(False)
+        db.execute(VEC_SCHEMA)
+    db.row_factory = sqlite3.Row
+    return db
+
+
+_model = None
+
+
+def model():
+    global _model
+    if _model is None:
+        from fastembed import TextEmbedding
+
+        _model = TextEmbedding("BAAI/bge-small-en-v1.5", cache_dir=str(vault.MODELS))
+    return _model
+
+
+def embed(texts, query=False):
+    try:
+        m = model()
+        vecs = m.query_embed(texts) if query else m.embed(texts)
+        return [[float(x) for x in v] for v in vecs]
+    except Exception as e:
+        vault.log(f"embedder unavailable, text search only: {e!r}")
+        return None
+
+
+def index(db):
+    rows = {r["slug"]: r for r in db.execute("select slug, hash, mtime from notes")}
+    seen, changed = set(), []
+    for path in vault.note_files():
+        slug = path.stem
+        seen.add(slug)
+        mtime = path.stat().st_mtime
+        row = rows.get(slug)
+        if row and row["mtime"] == mtime:
+            continue
+        digest = hashlib.sha1(path.read_bytes()).hexdigest()
+        if row and row["hash"] == digest:
+            db.execute("update notes set mtime=? where slug=?", (mtime, slug))
+            continue
+        note = vault.read_note(path)
+        upsert(db, note, digest, mtime)
+        changed.append(note)
+    gone = set(rows) - seen
+    for slug in gone:
+        remove(db, slug)
+    db.commit()
+    if changed:
+        embed_notes(db, changed)
+    return changed, gone
+
+
+def upsert(db, note, digest, mtime):
+    db.execute(
+        """insert into notes(slug, path, type, project, status, title, tags, created, updated, hash, mtime)
+           values(?,?,?,?,?,?,?,?,?,?,?)
+           on conflict(slug) do update set path=excluded.path, type=excluded.type, project=excluded.project,
+             status=excluded.status, title=excluded.title, tags=excluded.tags, created=excluded.created,
+             updated=excluded.updated, hash=excluded.hash, mtime=excluded.mtime""",
+        (note.slug, note.path.as_posix(), note.type, note.project, note.status, note.title,
+         " ".join(note.tags), note.created, note.updated, digest, mtime),
+    )
+    db.execute("delete from fts where slug=?", (note.slug,))
+    db.execute(
+        "insert into fts(slug, title, body, tags, links) values(?,?,?,?,?)",
+        (note.slug, note.title, note.body, " ".join(note.tags), " ".join(note.links)),
+    )
+
+
+def remove(db, slug):
+    db.execute("delete from notes where slug=?", (slug,))
+    db.execute("delete from fts where slug=?", (slug,))
+    db.execute("delete from injected where slug=?", (slug,))
+    if vec_loaded(db):
+        db.execute("delete from vec where slug=?", (slug,))
+
+
+def vec_loaded(db):
+    try:
+        db.execute("select vec_version()")
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def embed_notes(db, notes):
+    vecs = embed([n.text() for n in notes])
+    if vecs is None or not vec_loaded(db):
+        return
+    from sqlite_vec import serialize_float32
+
+    for note, vec in zip(notes, vecs):
+        db.execute("delete from vec where slug=?", (note.slug,))
+        db.execute("insert into vec(slug, embedding) values(?, ?)", (note.slug, serialize_float32(vec)))
+    db.commit()
+
+
+def tokens(text):
+    return [t for t in re.findall(r"[a-z0-9_./-]+", text.lower()) if len(t) >= 3][:12]
+
+
+def fts_query(text):
+    return " OR ".join('"' + t.replace('"', "") + '"' for t in tokens(text))
+
+
+def search(db, query, project=None, type=None, k=8, vector=True):
+    cands = defaultdict(dict)
+    q = fts_query(query)
+    if q:
+        for slug, rank in db.execute(
+            "select slug, bm25(fts) from fts where fts match ? order by bm25(fts) limit ?", (q, k * 3)
+        ):
+            cands[slug]["fts"] = rank
+    if vector and vec_loaded(db):
+        qv = embed([query], query=True)
+        if qv:
+            from sqlite_vec import serialize_float32
+
+            for slug, dist in db.execute(
+                "select slug, distance from vec where embedding match ? and k = ?", (serialize_float32(qv[0]), k * 3)
+            ):
+                cands[slug]["vec"] = dist
+    score = defaultdict(float)
+    for key in ("fts", "vec"):
+        order = sorted((s for s in cands if key in cands[s]), key=lambda s: cands[s][key])
+        for i, s in enumerate(order):
+            score[s] += 1 / (RRF_K + i)
+    hits, maybe = [], []
+    for slug in sorted(score, key=lambda s: -score[s]):
+        row = note_row(db, slug, project, type)
+        if row is None:
+            continue
+        c = cands[slug]
+        is_hit = c.get("vec", 9) <= VEC_MAX or c.get("fts", 0) <= FTS_MAX
+        (hits if is_hit and len(hits) < k else maybe).append(row)
+    linked = linked_rows(db, hits[:3], {r["slug"] for r in hits + maybe}, project)
+    return hits, (linked + maybe)[:5]
+
+
+def note_row(db, slug, project=None, type=None):
+    row = db.execute("select * from notes where slug=? and status='active'", (slug,)).fetchone()
+    if row is None:
+        return None
+    if project and row["project"] not in (project, "global"):
+        return None
+    if type and row["type"] != type:
+        return None
+    return row
+
+
+def linked_rows(db, rows, skip, project):
+    out = []
+    for row in rows:
+        links = db.execute("select links from fts where slug=?", (row["slug"],)).fetchone()
+        for slug in (links[0].split() if links and links[0] else []):
+            if slug not in skip:
+                linked = note_row(db, slug, project)
+                if linked is not None:
+                    skip.add(slug)
+                    out.append(linked)
+    return out
+
+
+def list_notes(db, project=None, types=None, k=20, status="active"):
+    sql = "select * from notes where status=?"
+    args = [status]
+    if project:
+        sql += " and project in (?, 'global')"
+        args.append(project)
+    if types:
+        sql += " and type in (" + ",".join("?" * len(types)) + ")"
+        args += list(types)
+    sql += " order by updated desc, created desc limit ?"
+    args.append(k)
+    return db.execute(sql, args).fetchall()
+
+
+def body_of(db, slug):
+    row = db.execute("select body from fts where slug=?", (slug,)).fetchone()
+    return row[0] if row else ""
+
+
+def injected_slugs(db, session, agent):
+    rows = db.execute(
+        "select slug from injected where session_id=? and coalesce(agent_id,'')=? and compacted_at is null",
+        (session, agent or ""),
+    )
+    return {r[0] for r in rows}
+
+
+def injected_rows(db, session):
+    return db.execute(
+        """select i.slug, i.source, i.at, n.title, n.path from injected i join notes n using(slug)
+           where i.session_id=? order by i.at desc""",
+        (session,),
+    ).fetchall()
+
+
+def record_injected(db, session, agent, slugs, source):
+    now = datetime.now().isoformat(timespec="seconds")
+    for slug in slugs:
+        db.execute(
+            "insert into injected(session_id, agent_id, slug, source, at) values(?,?,?,?,?)",
+            (session, agent or None, slug, source, now),
+        )
+        db.execute("update notes set injected=injected+1, last_injected=? where slug=?", (now, slug))
+    db.commit()
+
+
+def stamp_compacted(db, session, agent):
+    now = datetime.now().isoformat(timespec="seconds")
+    db.execute(
+        "update injected set compacted_at=? where session_id=? and coalesce(agent_id,'')=? and compacted_at is null",
+        (now, session, agent or ""),
+    )
+    db.commit()
+
+
+def before_compaction(db, session, agent):
+    return db.execute(
+        """select distinct i.slug, n.title from injected i join notes n using(slug)
+           where i.session_id=? and coalesce(i.agent_id,'')=? and n.status='active' order by i.at desc""",
+        (session, agent or ""),
+    ).fetchall()
+
+
+def days_ago(iso):
+    try:
+        return (date.today() - date.fromisoformat(str(iso)[:10])).days
+    except ValueError:
+        return 0
+
+
+def dupe_pairs(db):
+    if not vec_loaded(db):
+        return []
+    import numpy as np
+
+    rows = db.execute("select v.slug, v.embedding from vec v join notes n using(slug) where n.status='active'").fetchall()
+    if len(rows) < 2:
+        return []
+    slugs = [r[0] for r in rows]
+    m = np.stack([np.frombuffer(r[1], dtype=np.float32) for r in rows])
+    m = m / (np.linalg.norm(m, axis=1, keepdims=True) + 1e-9)
+    sim = m @ m.T
+    pairs = []
+    for i in range(len(slugs)):
+        for j in range(i + 1, len(slugs)):
+            if sim[i, j] >= DUPE_SIM:
+                pairs.append((slugs[i], slugs[j], round(float(sim[i, j]), 3)))
+    return pairs
+
+
+def last_pass():
+    log = vault.vault_path() / "system" / "log.md"
+    if not log.exists():
+        return None
+    dates = re.findall(r"^## (\d{4}-\d{2}-\d{2})", log.read_text(encoding="utf-8"), re.M)
+    return days_ago(dates[-1]) if dates else None
+
+
+def errors_since_pass():
+    log = vault.mem_dir() / "mem.log"
+    if not log.exists():
+        return 0
+    lines = log.read_text(encoding="utf-8").splitlines()
+    since = last_pass()
+    if since is None:
+        return len(lines)
+    return sum(1 for line in lines if days_ago(line[:10]) <= since)
+
+
+def health(db, project):
+    leftovers = list_notes(db, project, ("leftovers",), k=100)
+    old = [r for r in leftovers if days_ago(r["created"]) > OLD_LEFTOVER_DAYS]
+    stale = [
+        r for r in db.execute("select * from notes where status='active' and type!='leftovers' and injected=0")
+        if days_ago(r["updated"]) > STALE_DAYS
+    ]
+    conflicts = [p.as_posix() for p in vault.vault_path().glob("*/*-conflict.md")]
+    feedback_week = sum(1 for r in list_notes(db, None, ("feedback",), k=100) if days_ago(r["created"]) <= 7)
+    dupes = dupe_pairs(db)
+    days = last_pass()
+    errors = errors_since_pass()
+    line = (
+        f"{len(leftovers)} open leftovers ({len(old)} older than {OLD_LEFTOVER_DAYS}d), {len(dupes)} dupe pairs, "
+        f"{len(stale)} stale candidates, {len(conflicts)} conflicts, {errors} hook errors, "
+        f"{feedback_week} corrections this week, last cleanup "
+        + (f"{days}d ago" if days is not None else "never")
+    )
+    return {
+        "line": line, "open": len(leftovers), "open_old": len(old), "dupes": len(dupes), "stale": len(stale),
+        "conflicts": len(conflicts), "errors": errors, "days_since_pass": days, "feedback_week": feedback_week,
+        "dupe_pairs": dupes, "stale_slugs": [r["slug"] for r in stale], "old_leftovers": [r["slug"] for r in old],
+        "conflict_files": conflicts,
+    }

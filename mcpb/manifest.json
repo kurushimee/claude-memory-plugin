@@ -1,0 +1,14 @@
+{
+  "manifest_version": "0.3",
+  "name": "memory",
+  "display_name": "Memory",
+  "version": "0.1.0",
+  "description": "claude's own memory on an obsidian vault, search and save from chat",
+  "author": { "name": "kurushimee" },
+  "server": {
+    "type": "binary",
+    "entry_point": "mem.exe",
+    "mcp_config": { "command": "C:\Users\kurus\.local\bin\mem.exe", "args": ["mcp"] }
+  },
+  "compatibility": { "platforms": ["win32"] }
+}

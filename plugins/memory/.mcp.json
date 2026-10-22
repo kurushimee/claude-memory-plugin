@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "memory": { "command": "mem", "args": ["mcp"] }
+  }
+}

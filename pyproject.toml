@@ -1,0 +1,16 @@
+[project]
+name = "mem"
+version = "0.1.0"
+description = "memory for claude on an obsidian vault, cli, hooks and mcp server"
+requires-python = ">=3.13"
+dependencies = ["sqlite-vec", "fastembed", "pyyaml", "mcp>=2", "numpy"]
+
+[project.scripts]
+mem = "mem.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
