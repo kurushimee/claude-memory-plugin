@@ -22,7 +22,7 @@ Notes are written in the tumblr voice in full, the same as chat output. All lowe
 - At every natural end of a task, and at the latest when calling `wrap_up`, ask three things. What did the user correct. What would I do differently. What is left open. Each answer is a note or nothing.
 - Lessons about memory itself go in the Lessons section at the bottom of this file. A save that turned out to be noise, a recall that was useless, a search that missed and why, the user saying "I told you this before". When a lesson is clear enough, edit the policy above it in place, commit and push `F:\claude-memory-plugin`.
 - The cleanup pass reads the feedback notes together. Ones that keep coming back get merged into one stronger note or promoted into this policy. Ones contradicted by newer feedback get retired with `memory_forget`. The health line counts corrections from the last seven days so you can see your own rate.
-- Gaps in the system itself get fixed when they show up. A missing command, a cut off that is clearly off, a keyword rule that misses a kind of input, these are a few lines in `F:\claude-memory-plugin`, fixed in session with `uv run python tests/check.py` passing, committed and pushed. Anything bigger becomes a leftover tagged `memory`.
+- Gaps in the system itself get fixed when they show up. A missing command, a cut off that is clearly off, a keyword rule that misses a kind of input, these are a few lines in `F:\claude-memory-plugin`, fixed in session with `uv run python tests/check.py` passing, committed and pushed. A change under `plugins/` also bumps that plugin's version in its `plugin.json`, installed copies only refresh on a new version. Anything bigger becomes a leftover tagged `memory`.
 
 ## Searching during a task
 
