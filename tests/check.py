@@ -28,7 +28,7 @@ sh("git", "-C", str(vault_dir), "add", ".gitignore")
 sh("git", "-C", str(vault_dir), "commit", "-q", "-m", "init")
 sh("git", "-C", str(vault_dir), "push", "-q", "-u", "origin", "main")
 
-from mem import cli, git, hooks, index, vault  # noqa: E402
+from mem import cli, git, hooks, index, judge, vault  # noqa: E402
 
 for t in vault.TYPES:
     (vault_dir / t).mkdir()
@@ -71,14 +71,26 @@ assert not hits or all(r["type"] == "leftovers" for r in hits)
 listed = index.list_notes(db, project, ("leftovers",))
 assert [r["slug"] for r in listed] == [left.slug]
 
+def fake_scores(query, docs):
+    """godot past the body gate, ghidra between the gates, the rest nowhere"""
+    between = (judge.TITLE_GATE + judge.BODY_GATE) / 2
+    return [judge.BODY_GATE if d.startswith(godot.title) else between if d.startswith(ghidra.title) else 0 for d in docs]
+
+
+real_scores, judge.scores = judge.scores, fake_scores
 prompt = {"hook_event_name": "UserPromptSubmit", "session_id": "s0", "cwd": project, "prompt": f"why does {elsewhere} fail to build"}
 first = hooks.recall(prompt)["hookSpecificOutput"]["additionalContext"]
-assert away.title in first and godot.title not in first and ghidra.title not in first, first
-assert hooks.recall(prompt) is None, "entered twice"
-hooks.compacted({"session_id": "s0"})
-assert away.title in hooks.recall(prompt)["hookSpecificOutput"]["additionalContext"], "not entered again after compaction"
-assert hooks.recall({**prompt, "prompt": "godot keeps hanging when a test run never exits"}) is None, "prompts match by scope only"
-assert hooks.recall({**prompt, "prompt": "what is it?"}) is None
+assert away.title in first and f"## {godot.title}" in first, first
+assert f"- {ghidra.title} ({ghidra.slug})" in first and "ghidra 12 sits" not in first, "a title past the loose gate comes without its body"
+assert hooks.recall(prompt) is None, "a folder, a body or a title came twice"
+index.stamp_compacted(db, "s0", "")
+again = hooks.recall(prompt)["hookSpecificOutput"]["additionalContext"]
+assert away.title in again and f"## {godot.title}" in again, "not brought again after compaction"
+for event in ("<task-notification>\n<summary>godot run finished</summary>\n</task-notification>", '<agent-message from="a1">\ngodot run finished\n</agent-message>'):
+    assert hooks.recall({**prompt, "session_id": "s0c", "prompt": event}) is None, "a background event went to the judge"
+judge.scores = lambda query, docs: None
+assert hooks.recall({**prompt, "session_id": "s0b", "prompt": "godot keeps hanging"}) is None, "something came by meaning without the judge"
+judge.scores = real_scores
 
 tool = {"hook_event_name": "PostToolUse", "session_id": "s1", "cwd": project, "tool_name": "Read", "tool_input": {"file_path": f"{elsewhere}/src/main.cpp"}}
 got = hooks.recall(tool)["hookSpecificOutput"]["additionalContext"]
@@ -109,7 +121,12 @@ start = {"hook_event_name": "SessionStart", "session_id": "s2", "source": "start
 text = hooks.brief(start)["hookSpecificOutput"]["additionalContext"]
 assert f"edit {away.slug}" in sh("git", "-C", str(bare), "log", "--oneline", "main").stdout, "an edit some other index call saw first never got committed"
 assert "how to work" in text and fb.title in text and "open leftovers" in text and left.title in text and "health:" in text, text
-assert ghidra.title not in text and away.title not in text, "the brief carries only the project and always notes"
+assert f"- {ghidra.title} ({ghidra.slug})" in text and "ghidra 12 sits" not in text, "a global note without always comes as a title only"
+assert away.title not in text, "the brief carries nothing from other folders"
+judge.scores = fake_scores
+fits = hooks.recall({**prompt, "session_id": "s2"})["hookSpecificOutput"]["additionalContext"]
+assert ghidra.slug not in fits, "a title the brief listed came again"
+judge.scores = real_scores
 resumed = hooks.brief({**start, "source": "resume"})["hookSpecificOutput"]["additionalContext"]
 assert fb.title not in resumed and left.title not in resumed, resumed
 sub = hooks.brief({**start, "hook_event_name": "SubagentStart", "agent_id": "a1"})["hookSpecificOutput"]["additionalContext"]
@@ -152,11 +169,16 @@ json.dumps(pane)
 
 for i in range(12):
     cli.save_note("feedback", f"stress note {i}", ("lorem " * 160).strip(), [], [], project)
-text, shown = hooks.brief_text(index.connect(vec=True), project)
+text, shown, _ = hooks.brief_text(index.connect(vec=True), project)
 lines = text.splitlines()
 assert "health:" in text and "open leftovers" in text, text[-300:]
 assert all(f"(stress-note-{i})" in text for i in range(12))
 assert 0 < len(shown) < 13 and all(any(l.startswith("## ") and f"({s})" in l for l in lines) for s in shown), shown
+
+if judge.MODEL.exists():
+    docs = [hooks.doc_of(db, index.note_row(db, s)) for s in (godot.slug, away.slug)]
+    real = judge.scores(hooks.query_of("godot keeps hanging when a test run never exits", ""), docs)
+    assert real and real[0] >= judge.BODY_GATE > judge.TITLE_GATE > real[1], real
 
 from mem import mcp_server  # noqa: E402
 

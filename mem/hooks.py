@@ -1,9 +1,15 @@
+import json
 import re
 
-from . import git, index, vault
+from . import git, index, judge, vault
 
 BUDGET = {"feedback": 6000, "leftovers": 2500, "notes": 3000}
 TOOL_KEYS = ("file_path", "path", "pattern", "command", "glob", "notebook_path")
+TITLES = 30
+TRANSCRIPT_TAIL = 256 * 1024
+REPLY_CHARS = 800
+NO_REPLY = "No response requested."
+EVENTS = ("<task-notification>", "<agent-message ")
 POINTER = (
     "the memory skill holds the policy, load it when in doubt. save with memory_save or mem save, "
     "search with memory_search or mem search, open a note with memory_show or mem show <slug>"
@@ -69,9 +75,12 @@ def sections(db, rows):
 
 def brief_text(db, project, session="", agent="", source="startup", is_sub=False):
     seen = safe(index.injected_slugs, db, session, agent, default=set()) if source == "resume" else set()
-    rows = [r for r in safe(index.list_notes, db, project, None, 500, default=[]) if belongs(r, project) and r["slug"] not in seen]
-    blocks, shown = sections(db, rows)
+    in_scope = [r for r in safe(index.list_notes, db, project, None, 500, default=[]) if r["slug"] not in seen]
+    blocks, shown = sections(db, [r for r in in_scope if belongs(r, project)])
     out = [f"memory brief for {project}", *blocks]
+    others = [r for r in in_scope if not belongs(r, project)][:TITLES]
+    if others:
+        out += ["other notes here, titles only, open one with mem show <slug> when it fits the task", *map(line, others)]
     if source == "compact" and session:
         before = safe(index.before_compaction, db, session, agent, default=[])
         if before:
@@ -83,7 +92,7 @@ def brief_text(db, project, session="", agent="", source="startup", is_sub=False
         if health:
             out.append("health: " + health["line"])
     out.append(POINTER)
-    return "\n\n".join(out), shown
+    return "\n\n".join(out), shown, [r["slug"] for r in others]
 
 
 def brief(payload):
@@ -101,8 +110,9 @@ def brief(payload):
     if not is_sub:
         for path in safe(git.edited, default=[]):
             safe(git.commit, [path], f"edit {path.stem}")
-    text, shown = brief_text(db, project, session, agent, source, is_sub)
+    text, shown, listed = brief_text(db, project, session, agent, source, is_sub)
     safe(index.record_injected, db, session, agent, shown, "brief")
+    safe(index.record_injected, db, session, agent, listed, index.MENTION)
     return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
 
 
@@ -137,9 +147,76 @@ def entered(db, project, places, seen, reached):
     return list(rows.values()), scopes
 
 
+def entry(db, session, agent, project, places, source):
+    try:
+        db.execute("begin immediate")
+        rows, scopes = entered(db, project, places, index.injected_slugs(db, session, agent), index.reached_projects(session, agent))
+        index.record_reached(session, agent, scopes)
+        if not rows:
+            return []
+        blocks, shown = sections(db, rows)
+        index.record_injected(db, session, agent, shown, source)
+    finally:
+        db.commit()
+    names = ", ".join(sorted({r["project"] for r in rows}))
+    return [f"memory for {names}, this session just reached it", *blocks]
+
+
+def last_reply(transcript_path):
+    """the end of the assistant's last reply, so the judge knows what a short prompt is about"""
+    try:
+        with open(transcript_path, "rb") as f:
+            f.seek(max(0, f.seek(0, 2) - TRANSCRIPT_TAIL))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except (OSError, TypeError):
+        return ""
+    for raw in reversed(lines):
+        if '"assistant"' not in raw:
+            continue
+        try:
+            content = json.loads(raw).get("message", {}).get("content")
+        except ValueError:
+            continue
+        texts = [c.get("text", "") for c in content if c.get("type") == "text"] if isinstance(content, list) else []
+        reply = "\n".join(texts).strip()
+        if reply and reply != NO_REPLY:
+            return reply[-REPLY_CHARS:]
+    return ""
+
+
+def doc_of(db, row):
+    return f"{row['title']}\n{row['tags'] or ''}\n{index.body_of(db, row['slug'])[:1000]}"
+
+
+def query_of(prompt, reply):
+    return (f"previous reply: {reply}\n" if reply else "") + f"user message: {prompt[:1500]}"
+
+
+def judged(db, session, agent, project, prompt, reply):
+    """the notes in scope whose body this session lacks, judged against the prompt. a body needs a strict
+    score, a title a loose one, since a title that misses costs one line"""
+    seen = index.injected_slugs(db, session, agent)
+    rows = [r for r in index.list_notes(db, project, None, 500) if r["slug"] not in seen]
+    if not rows or not prompt.strip():
+        return []
+    scores = judge.scores(query_of(prompt, reply), [doc_of(db, r) for r in rows])
+    if not scores:
+        return []
+    ranked = sorted(zip(scores, rows), key=lambda pair: pair[0], reverse=True)
+    mentioned = index.mentioned_slugs(db, session, agent)
+    bodies = [r for s, r in ranked if s >= judge.BODY_GATE][:3]
+    titles = [r for s, r in ranked if judge.TITLE_GATE <= s < judge.BODY_GATE and r["slug"] not in mentioned][:5]
+    index.record_injected(db, session, agent, [r["slug"] for r in bodies], "prompt")
+    index.record_injected(db, session, agent, [r["slug"] for r in titles], index.MENTION)
+    out = ["memory that fits this message", *(block(db, r) for r in bodies)] if bodies else []
+    if titles:
+        out += ["maybe related, titles only, open one with mem show <slug> if it fits", *map(line, titles)]
+    return out
+
+
 def recall(payload):
-    """notes come in by scope only, a folder's notes the first time the session reaches it. matching by meaning
-    let unrelated notes through on every model tried, so finding notes by topic is left to memory_search"""
+    """a folder's notes come in the first time the session reaches it, and a prompt also gets the notes in
+    scope judged by meaning"""
     event = payload.get("hook_event_name", "")
     session = payload.get("session_id", "")
     agent = payload.get("agent_id") or ""
@@ -151,28 +228,16 @@ def recall(payload):
         if touches_memory(text):
             return None
     places = places_in(project, text)
-    if not places:
+    if source == "tool" and not places:
         return None
     db = index.connect(vec=source == "prompt")
     if source == "prompt":
         safe(index.index, db)
         db.commit()
-    try:
-        db.execute("begin immediate")
-        rows, scopes = entered(db, project, places, index.injected_slugs(db, session, agent), index.reached_projects(session, agent))
-        index.record_reached(session, agent, scopes)
-        if not rows:
-            return None
-        places = sorted({r["project"] for r in rows})
-        blocks, shown = sections(db, rows)
-        index.record_injected(db, session, agent, shown, source)
-    finally:
-        db.commit()
-    context = "\n\n".join([f"memory for {', '.join(places)}, this session just reached it", *blocks])
-    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": context}}
-
-
-def compacted(payload):
-    db = index.connect(vec=False)
-    index.stamp_compacted(db, payload.get("session_id", ""), payload.get("agent_id") or "")
-    return None
+    out = entry(db, session, agent, project, places, source) if places else []
+    # background task events and subagent reports arrive as prompts too, often, and are no reason to load the model
+    if source == "prompt" and not text.lstrip().startswith(EVENTS):
+        out += safe(judged, db, session, agent, project, text, last_reply(payload.get("transcript_path")), default=[])
+    if not out:
+        return None
+    return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": "\n\n".join(out)}}

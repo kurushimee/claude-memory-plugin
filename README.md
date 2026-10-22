@@ -13,6 +13,12 @@ mem init <vault folder>
 mem index
 ```
 
+Prompts are also matched to notes by meaning on an NVIDIA GPU. That needs both `win-cuda-12.4-x64` zips of llama.cpp release b11806 unpacked into `~/.cache/mem/llama/bin` and the reranker model next to it. Without them a prompt brings only the notes of the folders it names.
+
+```
+curl -L -o ~/.cache/mem/llama/qwen3-reranker-4b-q4_k_m.gguf https://huggingface.co/gorse-io/Qwen3-Reranker-4B-GGUF/resolve/main/Qwen3-Reranker-4B-Q4_K_M.gguf
+```
+
 The plugins, from the Plugins page of the desktop app or claude.ai, add the marketplace `kurushimee/claude-memory-plugin` and turn on `memory`, plus `memory-pane` for the Code tab. From a terminal instead
 
 ```

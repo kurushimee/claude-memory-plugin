@@ -15,6 +15,7 @@ RRF_K = 60
 STALE_DAYS = 90
 OLD_LEFTOVER_DAYS = 30
 DUPE_SIM = 0.92
+MENTION = "mention"
 STOP = set(
     """the and for with from into this that these those there their they them then than when where which what who why
     how are was were been being have has had does did done will would could should can may might must not nor but yet
@@ -264,12 +265,22 @@ def body_of(db, slug):
     return row[0] if row else ""
 
 
-def injected_slugs(db, session, agent):
+def session_slugs(db, session, agent, mentions):
     rows = db.execute(
-        "select slug from injected where session_id=? and coalesce(agent_id,'')=? and compacted_at is null",
-        (session, agent or ""),
+        "select slug from injected where session_id=? and coalesce(agent_id,'')=? and compacted_at is null and (source=?)=?",
+        (session, agent or "", MENTION, mentions),
     )
     return {r[0] for r in rows}
+
+
+def injected_slugs(db, session, agent):
+    """notes whose body this session already got"""
+    return session_slugs(db, session, agent, mentions=False)
+
+
+def mentioned_slugs(db, session, agent):
+    """notes this session got as a title only"""
+    return session_slugs(db, session, agent, mentions=True)
 
 
 def injected_rows(db, session):
@@ -287,7 +298,8 @@ def record_injected(db, session, agent, slugs, source):
             "insert into injected(session_id, agent_id, slug, source, at) values(?,?,?,?,?)",
             (session, agent or None, slug, source, now),
         )
-        db.execute("update notes set injected=injected+1, last_injected=? where slug=?", (now, slug))
+        if source != MENTION:
+            db.execute("update notes set injected=injected+1, last_injected=? where slug=?", (now, slug))
     db.commit()
 
 
@@ -329,8 +341,9 @@ def stamp_compacted(db, session, agent):
 def before_compaction(db, session, agent):
     return db.execute(
         """select distinct i.slug, n.title from injected i join notes n using(slug)
-           where i.session_id=? and coalesce(i.agent_id,'')=? and n.status='active' order by i.at desc""",
-        (session, agent or ""),
+           where i.session_id=? and coalesce(i.agent_id,'')=? and n.status='active' and i.source!=?
+           order by i.at desc""",
+        (session, agent or "", MENTION),
     ).fetchall()
 
 

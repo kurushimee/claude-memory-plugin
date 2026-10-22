@@ -5,7 +5,7 @@ import traceback
 
 from . import git, index, vault
 
-HOOKS = ("brief", "recall", "compacted")
+HOOKS = ("brief", "recall")
 
 
 def main():

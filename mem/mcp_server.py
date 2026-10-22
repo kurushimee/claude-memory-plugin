@@ -25,9 +25,9 @@ def memory_brief(project: str | None = None) -> str:
     index.index(db)
     if project is None:
         projects = [r[0] for r in db.execute("select distinct project from notes where project!='global' order by project")]
-        text, _ = hooks.brief_text(db, "global")
+        text = hooks.brief_text(db, "global")[0]
         return "known projects: " + (", ".join(projects) or "none yet") + "\n\n" + text
-    text, _ = hooks.brief_text(db, project)
+    text = hooks.brief_text(db, project)[0]
     return text
 
 
