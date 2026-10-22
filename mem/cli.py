@@ -10,6 +10,8 @@ HOOKS = ("brief", "recall", "compacted")
 
 
 def main():
+    sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = parse(sys.argv[1:])
     if args.cmd in HOOKS:
         return run_hook(args.cmd)

@@ -8,7 +8,7 @@
   "server": {
     "type": "binary",
     "entry_point": "mem.exe",
-    "mcp_config": { "command": "C:\Users\kurus\.local\bin\mem.exe", "args": ["mcp"] }
+    "mcp_config": { "command": "C:/Users/kurus/.local/bin/mem.exe", "args": ["mcp"] }
   },
   "compatibility": { "platforms": ["win32"] }
 }

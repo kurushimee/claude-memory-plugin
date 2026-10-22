@@ -1,8 +1,19 @@
 {
   "name": "claude-memory",
-  "owner": { "name": "kurushimee" },
+  "owner": {
+    "name": "kurushimee"
+  },
   "plugins": [
-    { "name": "memory", "source": "./plugins/memory", "description": "claude's own memory on an obsidian vault" },
-    { "name": "memory-pane", "source": "./plugins/memory-pane", "description": "a pane beside the chat showing what memory remembered" }
-  ]
+    {
+      "name": "memory",
+      "source": "./plugins/memory",
+      "description": "claude's own memory on an obsidian vault"
+    },
+    {
+      "name": "memory-pane",
+      "source": "./plugins/memory-pane",
+      "description": "a pane beside the chat showing what memory remembered"
+    }
+  ],
+  "description": "memory for claude on an obsidian vault, the memory plugin and the pane mod"
 }

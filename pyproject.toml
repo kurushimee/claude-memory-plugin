@@ -3,7 +3,7 @@ name = "mem"
 version = "0.1.0"
 description = "memory for claude on an obsidian vault, cli, hooks and mcp server"
 requires-python = ">=3.13"
-dependencies = ["sqlite-vec", "fastembed", "pyyaml", "mcp>=2", "numpy"]
+dependencies = ["sqlite-vec", "onnxruntime", "tokenizers", "huggingface-hub", "numpy", "pyyaml", "mcp>=2"]
 
 [project.scripts]
 mem = "mem.cli:main"

@@ -3,6 +3,7 @@ import re
 import sqlite3
 from collections import defaultdict
 from datetime import date, datetime
+from pathlib import Path
 
 from . import vault
 
@@ -40,23 +41,49 @@ def connect(vec=False):
     return db
 
 
+MODEL = "Qdrant/bge-small-en-v1.5-onnx-Q"
+MODEL_FILES = ["model_optimized.onnx", "tokenizer.json"]
 _model = None
+
+
+def model_dir():
+    snapshots = vault.MODELS / f"models--{MODEL.replace('/', '--')}" / "snapshots"
+    found = sorted(snapshots.glob("*/model_optimized.onnx"))
+    if found:
+        return found[-1].parent
+    from huggingface_hub import snapshot_download
+
+    return Path(snapshot_download(MODEL, cache_dir=str(vault.MODELS), allow_patterns=MODEL_FILES))
 
 
 def model():
     global _model
     if _model is None:
-        from fastembed import TextEmbedding
+        import onnxruntime
+        from tokenizers import Tokenizer
 
-        _model = TextEmbedding("BAAI/bge-small-en-v1.5", cache_dir=str(vault.MODELS))
+        folder = model_dir()
+        tok = Tokenizer.from_file(str(folder / "tokenizer.json"))
+        tok.enable_truncation(512)
+        tok.enable_padding()
+        opts = onnxruntime.SessionOptions()
+        opts.log_severity_level = 3
+        session = onnxruntime.InferenceSession(str(folder / "model_optimized.onnx"), opts, providers=["CPUExecutionProvider"])
+        _model = tok, session
     return _model
 
 
-def embed(texts, query=False):
+def embed(texts):
     try:
-        m = model()
-        vecs = m.query_embed(texts) if query else m.embed(texts)
-        return [[float(x) for x in v] for v in vecs]
+        import numpy as np
+
+        tok, session = model()
+        enc = tok.encode_batch(texts)
+        ids = np.array([e.ids for e in enc], dtype=np.int64)
+        mask = np.array([e.attention_mask for e in enc], dtype=np.int64)
+        feed = {"input_ids": ids, "attention_mask": mask, "token_type_ids": np.zeros_like(ids)}
+        cls = session.run(None, feed)[0][:, 0]
+        return (cls / np.linalg.norm(cls, axis=1, keepdims=True)).tolist()
     except Exception as e:
         vault.log(f"embedder unavailable, text search only: {e!r}")
         return None
@@ -150,7 +177,7 @@ def search(db, query, project=None, type=None, k=8, vector=True):
         ):
             cands[slug]["fts"] = rank
     if vector and vec_loaded(db):
-        qv = embed([query], query=True)
+        qv = embed([query])
         if qv:
             from sqlite_vec import serialize_float32
 
