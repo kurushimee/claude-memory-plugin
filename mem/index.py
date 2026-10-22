@@ -8,12 +8,23 @@ from pathlib import Path
 from . import vault
 
 DIM = 384
-VEC_MAX = 0.42
-FTS_MAX = -2.0
+VEC_MAX = 0.36
+FTS_MAX = -5.0
+FTS_MAX_PROMPT = -8.0
 RRF_K = 60
 STALE_DAYS = 90
 OLD_LEFTOVER_DAYS = 30
 DUPE_SIM = 0.92
+STOP = set(
+    """the and for with from into this that these those there their they them then than when where which what who why
+    how are was were been being have has had does did done will would could should can may might must not nor but yet
+    also just like only same such some any all each every both few more most much very really quite sure well still
+    here now one two new old get got put set let see say said make made need want use used using run ran try tried
+    users kurus appdata local roaming temp tmp src lib bin dist build node_modules venv git cmd echo cat type dir head
+    tail grep find python python3 npm npx bun node exe main index test tests com org http https www file files path
+    json yaml toml txt lock log out output true false null none select update delete insert order limit sort uniq awk
+    sed tee xargs mkdir touch chmod pwd""".split()
+)
 
 SCHEMA = """
 create table if not exists notes(
@@ -161,14 +172,18 @@ def embed_notes(db, notes):
 
 
 def tokens(text):
-    return [t for t in re.findall(r"[a-z0-9_./-]+", text.lower()) if len(t) >= 3][:12]
+    found = []
+    for t in re.findall(r"[a-z0-9_./-]+", text.lower()):
+        if len(t) >= 3 and t not in STOP and t not in found:
+            found.append(t)
+    return [t for t in found if not any(t != u and t in u for u in found)][:12]
 
 
 def fts_query(text):
     return " OR ".join('"' + t.replace('"', "") + '"' for t in tokens(text))
 
 
-def search(db, query, project=None, type=None, k=8, vector=True):
+def search(db, query, project=None, type=None, k=8, vector=True, fts_max=FTS_MAX):
     cands = defaultdict(dict)
     q = fts_query(query)
     if q:
@@ -196,7 +211,7 @@ def search(db, query, project=None, type=None, k=8, vector=True):
         if row is None:
             continue
         c = cands[slug]
-        is_hit = c.get("vec", 9) <= VEC_MAX or c.get("fts", 0) <= FTS_MAX
+        is_hit = c.get("vec", 9) <= VEC_MAX or c.get("fts", 0) <= fts_max
         (hits if is_hit and len(hits) < k else maybe).append(row)
     linked = linked_rows(db, hits[:3], {r["slug"] for r in hits + maybe}, project)
     return hits, (linked + maybe)[:5]

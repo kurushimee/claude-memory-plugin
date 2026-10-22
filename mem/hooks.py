@@ -5,12 +5,6 @@ from . import git, index, vault
 
 CAP = 7000
 BODIES_IN_BRIEF = 6
-STOP = set(
-    """users kurus appdata local roaming temp tmp src lib bin dist build node_modules venv the and for with from
-    into git cmd echo cat type dir head tail grep find python python3 npm npx bun node uv run exe main index test
-    tests com org http https www file files path json yaml toml txt lock log out output true false null none
-    select where from into update delete insert order limit""".split()
-)
 POINTER = (
     "the memory skill holds the policy, load it when in doubt. save with memory_save or mem save, "
     "search with memory_search or mem search, open a note with memory_show or mem show <slug>"
@@ -95,7 +89,7 @@ def keywords(tool_input):
     seen = []
     for w in words:
         w = w.rsplit(".", 1)[0] if "." in w[1:] else w
-        if len(w) >= 3 and w not in STOP and w not in seen:
+        if len(w) >= 3 and w not in index.STOP and w not in seen:
             seen.append(w)
     return " ".join(seen[:12])
 
@@ -113,7 +107,7 @@ def recall(payload):
     if event == "UserPromptSubmit":
         db = index.connect(vec=True)
         safe(index.index, db)
-        hits, maybe = index.search(db, payload.get("prompt", ""), project=project, k=3)
+        hits, maybe = index.search(db, payload.get("prompt", ""), project=project, k=3, fts_max=index.FTS_MAX_PROMPT)
         source, cap = "prompt", 3
     else:
         tool_input = payload.get("tool_input") or {}
@@ -123,8 +117,8 @@ def recall(payload):
         if not query:
             return None
         db = index.connect(vec=False)
-        hits, maybe = index.search(db, query, project=project, k=2, vector=False)
-        source, cap = "tool", 2
+        hits, maybe = index.search(db, query, project=project, k=1, vector=False)
+        source, cap = "tool", 1
     seen = index.injected_slugs(db, session, agent)
     hits = [r for r in hits if r["slug"] not in seen][:cap]
     picked = {r["slug"] for r in hits}
