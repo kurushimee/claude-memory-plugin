@@ -1,6 +1,8 @@
+import gc
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -190,6 +192,13 @@ assert mcp_server.extension_covers()
 os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
 assert not mcp_server.extension_covers()
 
+def writable(remove, path, _):
+    """git keeps its objects read only, which Windows refuses to delete"""
+    os.chmod(path, stat.S_IWRITE)
+    remove(path)
+
+
 db.close()
-shutil.rmtree(tmp, ignore_errors=True)
+gc.collect()
+shutil.rmtree(tmp, onexc=writable)
 print("all checks passed")
