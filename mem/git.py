@@ -2,7 +2,7 @@ import subprocess
 
 from . import vault
 
-NET_TIMEOUT = 15
+NET_TIMEOUT = 10
 
 
 def git(*args, timeout=None):
