@@ -90,7 +90,7 @@ def run(args):
             db = index.connect(vec=True)
             index.index(db)
             if args.query:
-                hits, maybe = index.search(db, args.query, args.project, args.type, args.k)
+                hits, maybe = index.search(db, args.query, args.project, args.type, args.k, fts_max=index.FTS_MAX_SEARCH)
             else:
                 hits, maybe = index.list_notes(db, args.project, (args.type,) if args.type else None, args.k), []
             print(json.dumps(search_json(db, hits, maybe)) if args.json else render_search(db, hits, maybe))

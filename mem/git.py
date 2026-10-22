@@ -2,11 +2,15 @@ import subprocess
 
 from . import vault
 
+NET_TIMEOUT = 15
 
-def git(*args):
-    return subprocess.run(
-        ["git", "-C", str(vault.vault_path()), *args], capture_output=True, text=True, encoding="utf-8", errors="replace"
-    )
+
+def git(*args, timeout=None):
+    cmd = ["git", "-C", str(vault.vault_path()), *args]
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 124, "", f"timed out after {timeout}s")
 
 
 def is_repo():
@@ -20,7 +24,7 @@ def has_remote():
 def sync():
     if not has_remote():
         return
-    if git("fetch", "-q").returncode != 0:
+    if git("fetch", "-q", timeout=NET_TIMEOUT).returncode != 0:
         vault.log("fetch failed, working offline")
         return
     if git("merge", "--no-edit", "-q", "origin/main").returncode != 0:
@@ -59,6 +63,6 @@ def commit(paths, message):
 def push():
     if not has_remote():
         return
-    r = git("push", "-q")
+    r = git("push", "-q", timeout=NET_TIMEOUT)
     if r.returncode != 0:
         vault.log("push failed: " + r.stderr.strip()[-200:])

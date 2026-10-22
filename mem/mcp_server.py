@@ -30,7 +30,7 @@ def memory_search(query: str, project: str | None = None, type: str | None = Non
     """hybrid search over the vault by words and by meaning. hits come with their body, a maybe list follows with titles worth opening. type is one of facts, feedback, projects, leftovers"""
     db = index.connect(vec=True)
     index.index(db)
-    hits, maybe = index.search(db, query, project=project, type=type, k=k)
+    hits, maybe = index.search(db, query, project=project, type=type, k=k, fts_max=index.FTS_MAX_SEARCH)
     return cli.render_search(db, hits, maybe)
 
 
