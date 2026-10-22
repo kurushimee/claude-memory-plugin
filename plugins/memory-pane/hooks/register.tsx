@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Injected, Note, PaneData, SearchData, View } from '../types'
+import type { Health, Injected, Note, PaneData, SearchData, View } from '../types'
 
 const PANE = 'memory'
 const EMPTY: View = { pane: null, search: null, isUnavailable: false }
@@ -35,10 +35,16 @@ async function refresh($: EngineInterface) {
 }
 
 async function search($: EngineInterface, query: string) {
+  if (query.trim() === '') return clearSearch($)
+
   const found = await memJson<SearchData>($, 'search', '--json', query)
   if (found === undefined) return markUnavailable($)
 
   await update($, view, v => ({ ...v, search: found, isUnavailable: false }))
+}
+
+async function clearSearch($: EngineInterface) {
+  await update($, view, v => ({ ...v, search: null }))
 }
 
 async function runThenRefresh($: EngineInterface, ...args: string[]) {
@@ -61,6 +67,32 @@ function scheduleRefresh($: EngineInterface) {
 
 function newestFirst(notes: Injected[]) {
   return [...notes].sort((a, b) => b.at.localeCompare(a.at))
+}
+
+function count(n: number, word: string) {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
+function problems(h: Health) {
+  const out: string[] = []
+  if (h.open_old > 0) out.push(`${count(h.open_old, 'leftover')} past 30d`)
+  if (h.dupes > 0) out.push(count(h.dupes, 'dupe pair'))
+  if (h.stale > 0) out.push(`${h.stale} stale`)
+  if (h.conflicts > 0) out.push(count(h.conflicts, 'conflict'))
+  if (h.errors > 0) out.push(count(h.errors, 'hook error'))
+  if (h.days_since_pass !== null && h.days_since_pass > 14) out.push(`cleanup ${h.days_since_pass}d ago`)
+
+  return out.join(', ')
+}
+
+function cleanupLine(h: Health) {
+  const pass = h.days_since_pass === null ? 'no cleanup yet' : `last cleanup ${h.days_since_pass}d ago`
+
+  return `${count(h.feedback_week, 'correction')} this week, ${pass}`
+}
+
+function projectName(project: string) {
+  return project.split('/').pop() || project
 }
 
 export const register: Register = on => {
@@ -96,28 +128,88 @@ export const register: Register = on => {
     const { Box, Text, Button } = table
     const { pane, search: found, isUnavailable } = await read($, view)
 
-    const row = (prefix: string, note: Note, tag?: string) => (
-      <Button key={`${prefix}-${note.slug}`} plain onPress={() => openInObsidian($, note.path)}>
-        {note.title}
-        {tag && <Text dimColor> {tag}</Text>}
-      </Button>
+    const row = (prefix: string, note: Note, tag: string) => (
+      <Box key={`${prefix}-${note.slug}`} flexDirection="row" alignItems="center" gap="sm">
+        <Box flexGrow={1} overflow="hidden">
+          <Button key={`${prefix}-${note.slug}-open`} plain onPress={() => openInObsidian($, note.path)}>
+            {note.title}
+          </Button>
+        </Box>
+        <Text size="caption" dimColor>
+          {tag}
+        </Text>
+      </Box>
+    )
+
+    const label = (text: string, empty: boolean) => (
+      <Box flexDirection="row" alignItems="center" gap="sm">
+        <Text size="footnote" weight="semibold" dimColor>
+          {text}
+        </Text>
+        {empty && (
+          <Text size="caption" dimColor>
+            none
+          </Text>
+        )}
+      </Box>
     )
 
     return (
-      <Box flexDirection="column" gap={1}>
+      <Box flexDirection="column" gap="md">
+        {isUnavailable && (
+          <Text size="footnote" color="error">
+            mem is not reachable, is it installed and on PATH
+          </Text>
+        )}
+        {!pane && !isUnavailable && (
+          <Text size="footnote" dimColor>
+            loading
+          </Text>
+        )}
         {pane && (
           <Box flexDirection="column">
-            <Text>{pane.project}</Text>
-            <Text dimColor>{pane.health.line}</Text>
+            <Text size="heading" weight="semibold">
+              {projectName(pane.project)}
+            </Text>
+            {pane.project !== 'global' && (
+              <Text size="caption" dimColor>
+                {pane.project}
+              </Text>
+            )}
+            <Text size="footnote" dimColor>
+              {`${count(pane.counts.notes, 'note')}, ${pane.counts.open} open, ${pane.counts.recalled} recalled`}
+            </Text>
           </Box>
         )}
-        {isUnavailable && <Text dimColor>mem is unavailable</Text>}
         {pane && (
           <Box flexDirection="column">
-            <Text dimColor>open leftovers</Text>
+            {problems(pane.health) === '' ? (
+              <Text size="footnote" color="success">
+                all clean
+              </Text>
+            ) : (
+              <Text size="footnote" color="warning">
+                {problems(pane.health)}
+              </Text>
+            )}
+            <Text size="caption" dimColor>
+              {cleanupLine(pane.health)}
+            </Text>
+          </Box>
+        )}
+        {pane && (
+          <Box flexDirection="column" gap="xs">
+            {label('open leftovers', pane.leftovers.length === 0)}
             {pane.leftovers.map(left => (
-              <Box key={`left-${left.slug}`} gap={1}>
-                {row('leftover', left, `${left.age_days}d`)}
+              <Box key={`left-${left.slug}`} flexDirection="row" alignItems="center" gap="sm">
+                <Box flexGrow={1} overflow="hidden">
+                  <Button key={`leftover-${left.slug}`} plain onPress={() => openInObsidian($, left.path)}>
+                    {left.title}
+                  </Button>
+                </Box>
+                <Text size="caption" dimColor>
+                  {`${left.age_days}d`}
+                </Text>
                 <Button key={`done-${left.slug}`} plain dimColor onPress={() => void runThenRefresh($, 'done', left.slug)}>
                   done
                 </Button>
@@ -126,22 +218,36 @@ export const register: Register = on => {
           </Box>
         )}
         {pane && (
-          <Box flexDirection="column">
-            <Text dimColor>remembered this session</Text>
+          <Box flexDirection="column" gap="xs">
+            {label('remembered this session', pane.injected.length === 0)}
             {newestFirst(pane.injected).map(note => row('injected', note, note.source))}
           </Box>
         )}
-        <Box flexDirection="column">
-          {'Input' in table && (
-            <table.Input key="query" placeholder="search" onSubmit={query => void search($, query)} />
+        <Box flexDirection="column" gap="xs">
+          {'Input' in table && <table.Input key="query" placeholder="search memory" onSubmit={query => void search($, query)} />}
+          {found && (
+            <Box flexDirection="row" alignItems="center" gap="sm">
+              <Text size="footnote" weight="semibold" dimColor>
+                {found.hits.length === 0 ? 'no hits' : count(found.hits.length, 'hit')}
+              </Text>
+              <Button key="clear" plain dimColor onPress={() => void clearSearch($)}>
+                clear
+              </Button>
+            </Box>
           )}
-          {found?.hits.map(hit => row('hit', hit))}
-          {found && found.maybe.length > 0 && <Text dimColor>maybe</Text>}
-          {found?.maybe.map(hit => row('maybe', hit))}
+          {found?.hits.map(hit => row('hit', hit, hit.type ?? ''))}
+          {found && found.maybe.length > 0 && label('maybe', false)}
+          {found?.maybe.map(hit => row('maybe', hit, hit.type ?? ''))}
         </Box>
-        <Box gap={1}>
-          {pane && <Button key="vault" onPress={() => openInObsidian($, pane.vault)}>open vault</Button>}
-          <Button key="reindex" onPress={() => void runThenRefresh($, 'index')}>reindex</Button>
+        <Box flexDirection="row" gap="sm">
+          {pane && (
+            <Button key="vault" variant="secondary" onPress={() => openInObsidian($, pane.vault)}>
+              open vault
+            </Button>
+          )}
+          <Button key="reindex" variant="secondary" onPress={() => void runThenRefresh($, 'index')}>
+            reindex
+          </Button>
         </Box>
       </Box>
     )

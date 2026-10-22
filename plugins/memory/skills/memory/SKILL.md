@@ -69,11 +69,12 @@ Read the health line in the brief. Do a pass when it shows hook errors, dupe pai
 5. Verify or forget each stale candidate.
 6. Read the feedback notes together, merge, promote or retire as in the learning loop.
 7. Read `mem log`, fix the cause of each error in `F:\claude-memory-plugin`, run `uv run python tests/check.py`.
-8. Once a month, `uv lock --upgrade` in `F:\claude-memory-plugin` and the check again.
-9. `claude plugin validate` on `plugins/memory` and `plugins/memory-pane`, `claude plugin test` on the pane, fix what they report.
-10. Re-read this skill and tighten it.
-11. Add a dated `## YYYY-MM-DD` entry to `system/log.md` in the vault saying what changed, the health line reads the date from it.
-12. Commit and push both repos.
+8. When recall has been noisy or missed things, `uv run python tests/tune.py` prints what the cut offs in `mem/index.py` inject for sample prompts and tool inputs. Add the case that went wrong to the samples, move the cut offs, keep the samples that still read right.
+9. Once a month, `uv lock --upgrade` in `F:\claude-memory-plugin` and the check again.
+10. `claude plugin validate` on `plugins/memory` and `plugins/memory-pane`, `claude plugin test` on the pane, fix what they report.
+11. Re-read this skill and tighten it.
+12. Add a dated `## YYYY-MM-DD` entry to `system/log.md` in the vault saying what changed, the health line reads the date from it.
+13. Commit and push both repos.
 
 ## Working without hooks
 
