@@ -23,8 +23,7 @@ sh("git", "init", "-q", "-b", "main", str(vault_dir))
 sh("git", "-C", str(vault_dir), "config", "user.email", "check@mem")
 sh("git", "-C", str(vault_dir), "config", "user.name", "check")
 sh("git", "-C", str(vault_dir), "remote", "add", "origin", str(bare))
-(vault_dir / ".gitignore").write_text(".mem/
-")
+(vault_dir / ".gitignore").write_text(".mem/\n")
 sh("git", "-C", str(vault_dir), "add", ".gitignore")
 sh("git", "-C", str(vault_dir), "commit", "-q", "-m", "init")
 sh("git", "-C", str(vault_dir), "push", "-q", "-u", "origin", "main")
@@ -116,7 +115,7 @@ assert sh("git", "-C", str(vault_dir), "status", "--porcelain").stdout.strip() =
 assert "merge remote" in sh("git", "-C", str(bare), "log", "--oneline", "main").stdout
 
 report = cli.check_report()
-assert report["notes"] == report["indexed"] == 3 and report["health"]["conflicts"] == 1, report["health"]
+assert report["notes"] == report["indexed"] == 4 and report["health"]["conflicts"] == 1, (report["health"], report["log_tail"])
 pane = cli.pane("s2", project)
 assert set(pane) == {"project", "vault", "health", "leftovers", "injected", "counts"} and pane["counts"]["recalled"] > 0
 json.dumps(pane)
