@@ -96,10 +96,10 @@ def brief(payload):
     if not is_sub and source in ("startup", "resume", "clear"):
         safe(git.sync)
     db = index.connect(vec=True)
-    changed, _ = safe(index.index, db, default=([], set()))
+    safe(index.index, db)
     if not is_sub:
-        for note in changed:
-            safe(git.commit, [note.path], f"edit {note.slug}")
+        for path in safe(git.edited, default=[]):
+            safe(git.commit, [path], f"edit {path.stem}")
     text, shown = brief_text(db, project, session, agent, source, is_sub)
     safe(index.record_injected, db, session, agent, shown, "brief")
     return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}

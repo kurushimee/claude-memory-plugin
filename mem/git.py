@@ -50,6 +50,12 @@ def keep_both():
     vault.log("merge conflicts kept beside: " + " ".join(files))
 
 
+def edited():
+    """note files changed but not committed, read from git since any index call may have already seen them"""
+    lines = git("status", "--porcelain", "--", *vault.TYPES).stdout.splitlines()
+    return [vault.vault_path() / l[3:] for l in lines if l.endswith(".md")]
+
+
 def commit(paths, message):
     if not is_repo():
         return

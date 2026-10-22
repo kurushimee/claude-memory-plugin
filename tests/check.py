@@ -88,8 +88,11 @@ assert hooks.recall({**tool, "tool_input": {"command": "grep -rn godot hanging t
 assert hooks.recall({**tool, "tool_input": {"command": "mem save --type facts --title x"}}) is None
 assert hooks.recall({**tool, "tool_input": {"file_path": f"{project}/facts/x.md"}}) is None
 
+away.path.write_text(away.path.read_text(encoding="utf-8") + "\nand cmake 3.30\n", encoding="utf-8")
+index.index(db)
 start = {"hook_event_name": "SessionStart", "session_id": "s2", "source": "startup", "cwd": project}
 text = hooks.brief(start)["hookSpecificOutput"]["additionalContext"]
+assert f"edit {away.slug}" in sh("git", "-C", str(bare), "log", "--oneline", "main").stdout, "an edit some other index call saw first never got committed"
 assert "how to work" in text and fb.title in text and "open leftovers" in text and left.title in text and "health:" in text, text
 assert ghidra.title not in text and away.title not in text, "the brief carries only the project and always notes"
 resumed = hooks.brief({**start, "source": "resume"})["hookSpecificOutput"]["additionalContext"]
