@@ -4,8 +4,6 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-import yaml
-
 TYPES = ("facts", "feedback", "projects", "leftovers")
 CONFIG = Path.home() / ".config" / "mem" / "vault"
 MODELS = Path.home() / ".cache" / "mem" / "models"
@@ -104,6 +102,8 @@ FRONT = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.S)
 
 
 def read_note(path):
+    import yaml
+
     path = Path(path)
     raw = path.read_text(encoding="utf-8").replace("\r\n", "\n")
     m = FRONT.match(raw)
@@ -126,6 +126,8 @@ def read_note(path):
 
 
 def write_note(note):
+    import yaml
+
     meta = {
         "title": note.title,
         "project": note.project,

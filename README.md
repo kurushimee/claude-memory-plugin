@@ -8,6 +8,7 @@ The command, on the machine that holds the vault
 
 ```
 uv tool install --python 3.13 git+https://github.com/kurushimee/claude-memory-plugin
+go install github.com/kurushimee/claude-memory-plugin/mem-gate@latest
 mem init <vault folder>
 mem index
 ```

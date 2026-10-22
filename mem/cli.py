@@ -1,4 +1,3 @@
-import argparse
 import json
 import os
 import sys
@@ -12,9 +11,9 @@ HOOKS = ("brief", "recall", "compacted")
 def main():
     sys.stdin.reconfigure(encoding="utf-8", errors="replace")
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if sys.argv[1:] and sys.argv[1] in HOOKS:
+        return run_hook(sys.argv[1])
     args = parse(sys.argv[1:])
-    if args.cmd in HOOKS:
-        return run_hook(args.cmd)
     try:
         run(args)
     except SystemExit:
@@ -28,6 +27,8 @@ def main():
 
 
 def parse(argv):
+    import argparse
+
     p = argparse.ArgumentParser(prog="mem", description="memory for claude on an obsidian vault")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init", help="record where the vault is").add_argument("vault")

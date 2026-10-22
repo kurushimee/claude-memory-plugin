@@ -88,6 +88,21 @@ assert hooks.recall({**tool, "tool_input": {"command": "grep -rn godot hanging t
 assert hooks.recall({**tool, "tool_input": {"command": "mem save --type facts --title x"}}) is None
 assert hooks.recall({**tool, "tool_input": {"file_path": f"{project}/facts/x.md"}}) is None
 
+gate_exe = tmp / "mem-gate.exe"
+sh("go", "build", "-o", str(gate_exe), ".", cwd=ROOT / "mem-gate")
+
+
+def gate(payload):
+    return subprocess.run([str(gate_exe)], input=json.dumps(payload), capture_output=True, text=True, check=True).stdout
+
+
+bash_path = f"/{elsewhere.as_posix()[0].lower()}{elsewhere.as_posix()[2:]}/src"
+gated = {**tool, "session_id": "g1", "tool_input": {"command": f"ls {bash_path}"}}
+assert gate({**gated, "tool_input": {"command": "git status"}}) == ""
+assert away.title in gate(gated), "the gate kept back a folder entry"
+assert gate(gated) == "", "the gate let a reached folder through"
+assert gate({**gated, "tool_input": {"file_path": f"{project}/facts/x.md"}}) == ""
+
 away.path.write_text(away.path.read_text(encoding="utf-8") + "\nand cmake 3.30\n", encoding="utf-8")
 index.index(db)
 start = {"hook_event_name": "SessionStart", "session_id": "s2", "source": "startup", "cwd": project}

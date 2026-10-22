@@ -1,6 +1,7 @@
 import hashlib
 import re
 import sqlite3
+import time
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -32,7 +33,6 @@ create table if not exists notes(
   injected integer default 0, last_injected text);
 create virtual table if not exists fts using fts5(slug unindexed, title, body, tags, links, tokenize='trigram');
 create table if not exists injected(session_id text, agent_id text, slug text, source text, at text, compacted_at text);
-create table if not exists reached(session_id text, agent_id text, project text, at text, compacted_at text);
 """
 VEC_SCHEMA = f"create virtual table if not exists vec using vec0(slug text primary key, embedding float[{DIM}] distance_metric=cosine)"
 
@@ -121,9 +121,17 @@ def index(db):
     for slug in gone:
         remove(db, slug)
     db.commit()
+    if changed or gone or not (vault.mem_dir() / "scopes").exists():
+        write_scopes(db)
     if changed:
         embed_notes(db, changed)
     return changed, gone
+
+
+def write_scopes(db):
+    """the folders that have notes, read by mem-gate"""
+    rows = db.execute("select distinct project from notes where status='active' and project!='global' order by project")
+    (vault.mem_dir() / "scopes").write_text("".join(r[0] + "\n" for r in rows), encoding="utf-8", newline="\n")
 
 
 def upsert(db, note, digest, mtime):
@@ -283,28 +291,39 @@ def record_injected(db, session, agent, slugs, source):
     db.commit()
 
 
-def reached_projects(db, session, agent):
-    rows = db.execute(
-        "select project from reached where session_id=? and coalesce(agent_id,'')=? and compacted_at is null",
-        (session, agent or ""),
-    )
-    return {r[0] for r in rows}
+def reached_file(session, agent):
+    """the folders a session already reached, a plain file so mem-gate can read it"""
+    return vault.mem_dir() / "reached" / f"{session}+{agent or ''}"
 
 
-def record_reached(db, session, agent, projects):
-    now = datetime.now().isoformat(timespec="seconds")
-    for p in projects:
-        db.execute("insert into reached(session_id, agent_id, project, at) values(?,?,?,?)", (session, agent or None, p, now))
+def reached_projects(session, agent):
+    path = reached_file(session, agent)
+    return set(path.read_text(encoding="utf-8").splitlines()) if path.exists() else set()
+
+
+def record_reached(session, agent, projects):
+    path = reached_file(session, agent)
+    path.parent.mkdir(exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as f:
+        f.writelines(p + "\n" for p in projects)
+
+
+def prune_reached():
+    """drops the files of sessions idle for a week"""
+    cutoff = time.time() - 7 * 86400
+    for path in (vault.mem_dir() / "reached").glob("*"):
+        if path.stat().st_mtime < cutoff:
+            path.unlink(missing_ok=True)
 
 
 def stamp_compacted(db, session, agent):
     now = datetime.now().isoformat(timespec="seconds")
-    for table in ("injected", "reached"):
-        db.execute(
-            f"update {table} set compacted_at=? where session_id=? and coalesce(agent_id,'')=? and compacted_at is null",
-            (now, session, agent or ""),
-        )
+    db.execute(
+        "update injected set compacted_at=? where session_id=? and coalesce(agent_id,'')=? and compacted_at is null",
+        (now, session, agent or ""),
+    )
     db.commit()
+    reached_file(session, agent).unlink(missing_ok=True)
 
 
 def before_compaction(db, session, agent):

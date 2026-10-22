@@ -95,6 +95,7 @@ def brief(payload):
     project = vault.project_of(payload.get("cwd", ""))
     if not is_sub and source in ("startup", "resume", "clear"):
         safe(git.sync)
+        safe(index.prune_reached)
     db = index.connect(vec=True)
     safe(index.index, db)
     if not is_sub:
@@ -106,7 +107,7 @@ def brief(payload):
 
 
 def tool_text(name, tool_input):
-    parts = [v[:300] for k, v in tool_input.items() if isinstance(v, str) and k in TOOL_KEYS]
+    parts = [tool_input[k][:300] for k in TOOL_KEYS if isinstance(tool_input.get(k), str)]
     return " ".join([name, *parts])
 
 
@@ -117,16 +118,23 @@ def touches_memory(text):
     return any(vault.in_scope(home, p) for p in vault.paths_in(text))
 
 
-def entered(db, project, text, seen, reached):
-    """notes of folders a path leads into that the session's own brief did not carry and no earlier call brought"""
-    rows = {}
-    for place in {vault.project_of(p) for p in vault.paths_in(text)} - {project, "global"}:
+def places_in(project, text):
+    """the folders outside the session's own project that the paths in text lead into"""
+    return {vault.project_of(p) for p in vault.paths_in(text)} - {project, "global"}
+
+
+def entered(db, project, places, seen, reached):
+    """notes of the places that the session's own brief did not carry and no earlier call brought, and the
+    folders those notes belong to"""
+    rows, scopes = {}, set()
+    for place in places:
         for r in index.list_notes(db, place, None, 500):
             if r["project"] in reached or r["project"] == "global" or vault.in_scope(r["project"], project):
                 continue
+            scopes.add(r["project"])
             if r["slug"] not in seen:
                 rows[r["slug"]] = r
-    return list(rows.values())
+    return list(rows.values()), scopes
 
 
 def recall(payload):
@@ -142,18 +150,21 @@ def recall(payload):
         source, text = "tool", tool_text(payload.get("tool_name", ""), payload.get("tool_input") or {})
         if touches_memory(text):
             return None
+    places = places_in(project, text)
+    if not places:
+        return None
     db = index.connect(vec=source == "prompt")
     if source == "prompt":
         safe(index.index, db)
         db.commit()
     try:
         db.execute("begin immediate")
-        rows = entered(db, project, text, index.injected_slugs(db, session, agent), index.reached_projects(db, session, agent))
+        rows, scopes = entered(db, project, places, index.injected_slugs(db, session, agent), index.reached_projects(session, agent))
+        index.record_reached(session, agent, scopes)
         if not rows:
             return None
         places = sorted({r["project"] for r in rows})
         blocks, shown = sections(db, rows)
-        index.record_reached(db, session, agent, places)
         index.record_injected(db, session, agent, shown, source)
     finally:
         db.commit()
