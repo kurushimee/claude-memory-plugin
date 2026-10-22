@@ -328,11 +328,11 @@ def errors_since_pass():
     log = vault.mem_dir() / "mem.log"
     if not log.exists():
         return 0
-    lines = log.read_text(encoding="utf-8").splitlines()
+    entries = [line for line in log.read_text(encoding="utf-8").splitlines() if re.match(r"\d{4}-\d{2}-\d{2} ", line)]
     since = last_pass()
     if since is None:
-        return len(lines)
-    return sum(1 for line in lines if days_ago(line[:10]) <= since)
+        return len(entries)
+    return sum(1 for line in entries if days_ago(line[:10]) <= since)
 
 
 def health(db, project):
