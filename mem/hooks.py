@@ -9,7 +9,8 @@ TITLES = 30
 TRANSCRIPT_TAIL = 256 * 1024
 REPLY_CHARS = 800
 NO_REPLY = "No response requested."
-EVENTS = ("<task-notification>", "<agent-message ")
+EVENTS = ("<task-notification>", "<agent-message ", "<cross-session-message ")
+REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 POINTER = (
     "the memory skill holds the policy, load it when in doubt. save with memory_save or mem save, "
     "search with memory_search or mem search, open a note with memory_show or mem show <slug>"
@@ -222,7 +223,8 @@ def recall(payload):
     agent = payload.get("agent_id") or ""
     project = vault.project_of(payload.get("cwd", ""))
     if event == "UserPromptSubmit":
-        source, text = "prompt", payload.get("prompt", "")
+        # the app puts its reminders, recent project folders among them, in front of what the user wrote
+        source, text = "prompt", REMINDER.sub("", payload.get("prompt", "")).strip()
     else:
         source, text = "tool", tool_text(payload.get("tool_name", ""), payload.get("tool_input") or {})
         if touches_memory(text):
@@ -235,7 +237,8 @@ def recall(payload):
         safe(index.index, db)
         db.commit()
     out = entry(db, session, agent, project, places, source) if places else []
-    # background task events and subagent reports arrive as prompts too, often, and are no reason to load the model
+    # background task events and messages from subagents or other sessions arrive as prompts too, often, and are no
+    # reason to load the model
     if source == "prompt" and not text.lstrip().startswith(EVENTS):
         out += safe(judged, db, session, agent, project, text, last_reply(payload.get("transcript_path")), default=[])
     if not out:

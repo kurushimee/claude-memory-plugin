@@ -88,10 +88,14 @@ assert hooks.recall(prompt) is None, "a folder, a body or a title came twice"
 index.stamp_compacted(db, "s0", "")
 again = hooks.recall(prompt)["hookSpecificOutput"]["additionalContext"]
 assert away.title in again and f"## {godot.title}" in again, "not brought again after compaction"
-for event in ("<task-notification>\n<summary>godot run finished</summary>\n</task-notification>", '<agent-message from="a1">\ngodot run finished\n</agent-message>'):
+for event in ("<task-notification>\n<summary>godot run finished</summary>\n</task-notification>", '<agent-message from="a1">\ngodot run finished\n</agent-message>', '<cross-session-message from="s9">\ngodot run finished\n</cross-session-message>'):
     assert hooks.recall({**prompt, "session_id": "s0c", "prompt": event}) is None, "a background event went to the judge"
-judge.scores = lambda query, docs: None
+queries = []
+judge.scores = lambda query, docs: queries.append(query)
 assert hooks.recall({**prompt, "session_id": "s0b", "prompt": "godot keeps hanging"}) is None, "something came by meaning without the judge"
+reminded = f"<system-reminder>\nrecent folders {elsewhere}\n</system-reminder>\nwhat now"
+assert hooks.recall({**prompt, "session_id": "s0d", "prompt": reminded}) is None, "a path in an app reminder counted as the user's"
+assert "recent folders" not in queries[-1] and "what now" in queries[-1], queries[-1]
 judge.scores = real_scores
 
 tool = {"hook_event_name": "PostToolUse", "session_id": "s1", "cwd": project, "tool_name": "Read", "tool_input": {"file_path": f"{elsewhere}/src/main.cpp"}}
