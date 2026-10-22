@@ -4,7 +4,7 @@ import re
 from . import git, index, vault
 
 CAP = 7000
-BODIES_IN_BRIEF = 6
+BUDGET = {"feedback": 6000, "leftovers": 2500, "notes": 3000}
 POINTER = (
     "the memory skill holds the policy, load it when in doubt. save with memory_save or mem save, "
     "search with memory_search or mem search, open a note with memory_show or mem show <slug>"
@@ -28,28 +28,40 @@ def block(db, row, extra=""):
     return f"## {row['title']} ({row['slug']}){tags}\n{index.body_of(db, row['slug'])}{extra}"
 
 
+def section(db, rows, budget, extra=lambda r: ""):
+    out, shown, used = [], [], 0
+    for i, r in enumerate(rows):
+        b = block(db, r, extra(r))
+        if used + len(b) > budget:
+            out += [line(x) for x in rows[i:]]
+            break
+        out.append(b)
+        shown.append(r["slug"])
+        used += len(b)
+    return out, shown
+
+
 def brief_text(db, project, session="", agent="", source="startup", is_sub=False):
     out = [f"memory brief for {project}"]
     shown = []
-    feedback = safe(index.list_notes, db, project, ("feedback",), 12, default=[])
+    feedback = safe(index.list_notes, db, project, ("feedback",), 40, default=[])
     if feedback:
-        out.append("how to work, from feedback, newest first")
-        out += [block(db, r) for r in feedback]
-        shown += [r["slug"] for r in feedback]
-    leftovers = safe(index.list_notes, db, project, ("leftovers",), 15, default=[])
+        blocks, slugs = section(db, feedback, BUDGET["feedback"])
+        out.append("how to work, from feedback, newest first, the rest as titles")
+        out += blocks
+        shown += slugs
+    leftovers = safe(index.list_notes, db, project, ("leftovers",), 40, default=[])
     if leftovers:
+        blocks, slugs = section(db, leftovers, BUDGET["leftovers"], lambda r: f"\nopen for {index.days_ago(r['created'])}d")
         out.append("open leftovers")
-        out += [block(db, r, f"\nopen for {index.days_ago(r['created'])}d") for r in leftovers]
-        shown += [r["slug"] for r in leftovers]
+        out += blocks
+        shown += slugs
     notes = safe(index.list_notes, db, project, ("facts", "projects"), 30, default=[])
     if notes:
+        blocks, slugs = section(db, notes, BUDGET["notes"])
         out.append("project and global notes, the rest as titles, open with mem show <slug>")
-        for i, r in enumerate(notes):
-            if i < BODIES_IN_BRIEF:
-                out.append(block(db, r))
-                shown.append(r["slug"])
-            else:
-                out.append(line(r))
+        out += blocks
+        shown += slugs
     if source == "compact" and session:
         before = safe(index.before_compaction, db, session, agent, default=[])
         if before:
@@ -61,7 +73,7 @@ def brief_text(db, project, session="", agent="", source="startup", is_sub=False
         if health:
             out.append("health: " + health["line"])
     out.append(POINTER)
-    return "\n\n".join(out)[:CAP], shown
+    return "\n\n".join(out), shown
 
 
 def brief(payload):

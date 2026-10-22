@@ -120,6 +120,14 @@ pane = cli.pane("s2", project)
 assert set(pane) == {"project", "vault", "health", "leftovers", "injected", "counts"} and pane["counts"]["recalled"] > 0
 json.dumps(pane)
 
+for i in range(12):
+    cli.save_note("feedback", f"stress note {i}", ("lorem " * 160).strip(), [], [], project)
+text, shown = hooks.brief_text(index.connect(vec=True), project)
+lines = text.splitlines()
+assert "health:" in text and "open leftovers" in text, text[-300:]
+assert all(f"(stress-note-{i})" in text for i in range(12))
+assert 0 < len(shown) < 13 and all(any(l.startswith("## ") and f"({s})" in l for l in lines) for s in shown), shown
+
 db.close()
 shutil.rmtree(tmp, ignore_errors=True)
 print("all checks passed")

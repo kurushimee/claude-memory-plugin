@@ -5,7 +5,7 @@ description: Claude's own memory, an Obsidian vault of notes with search, remind
 
 # Memory
 
-The vault at `F:\claude-memory` (a private GitHub repo, `kurushimee/claude-memory`) holds one note per file in four folders, `facts`, `feedback`, `projects` and `leftovers`. The `mem` command indexes it and syncs it with GitHub, hooks push notes into Code and local Cowork sessions, and the `memory_*` MCP tools give the same memory as tools. Prefer the tools when they are listed, fall back to `mem` through Bash, and in a session with neither, see Working without hooks below.
+The vault at `F:\claude-memory` (a private GitHub repo, `kurushimee/claude-memory`) holds one note per file in four folders, `facts`, `feedback`, `projects` and `leftovers`. The `mem` command indexes it and syncs it with GitHub, hooks push notes into Code and local Cowork sessions, and the `memory_*` MCP tools give the same memory as tools, listed as `mcp__plugin_memory_memory__memory_*` and loaded with ToolSearch when they show as deferred. Prefer the tools when they are listed, fall back to `mem` through Bash, and in a session with neither, see Working without hooks below.
 
 ## The point
 
@@ -96,3 +96,4 @@ If the clone is not possible either, say so once and go on.
 ## Lessons
 
 - The length of a prompt says nothing about the effort the task behind it needs. A two word prompt can carry the biggest job of the day. Never scale attention, search or care by how much the user typed.
+- A flat character cap on the brief cut it mid word in a project with ten long feedback notes, so the leftovers and the health line never arrived, and the cut notes still counted as injected, so recall never brought them back. Each section now has its own budget and only a note whose body is in the text counts as shown. Whatever is cut has to fail loud, in the health line or as titles, never silently.
