@@ -25,7 +25,6 @@ def sync():
     if not has_remote():
         return
     if git("fetch", "-q", timeout=NET_TIMEOUT).returncode != 0:
-        vault.log("fetch failed, working offline")
         return
     if git("merge", "--no-edit", "-q", "origin/main").returncode != 0:
         keep_both()
@@ -67,8 +66,13 @@ def commit(paths, message):
 
 
 def push():
+    """a failed push leaves its commits for the next one, and health counts what is still unpushed"""
+    if has_remote():
+        git("push", "-q", timeout=NET_TIMEOUT)
+
+
+def unpushed():
     if not has_remote():
-        return
-    r = git("push", "-q", timeout=NET_TIMEOUT)
-    if r.returncode != 0:
-        vault.log("push failed: " + r.stderr.strip()[-200:])
+        return 0
+    r = git("rev-list", "--count", "@{u}..HEAD")
+    return int(r.stdout) if r.returncode == 0 else 0

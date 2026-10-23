@@ -60,7 +60,7 @@ One fact per note, short, in the voice above. The type is the folder. The slug c
 
 ## The cleanup pass
 
-Read the health line in the brief. Do a pass when it shows hook errors, dupe pairs, conflicts, leftovers past 30 days, a pile of stale candidates, or more than 14 days since the last one. Do it at a natural pause in the current task, never mid edit, and in whatever session you are in.
+Read the health line in the brief. Do a pass when it shows hook errors, unpushed commits, dupe pairs, conflicts, leftovers past 30 days, a pile of stale candidates, or more than 14 days since the last one. Do it at a natural pause in the current task, never mid edit, and in whatever session you are in.
 
 1. `memory_check` (`mem check`) for the full picture.
 2. Verify each open leftover against the project (git log, the files) and mark it done or update it.
@@ -68,7 +68,7 @@ Read the health line in the brief. Do a pass when it shows hook errors, dupe pai
 4. Merge each `*-conflict.md` into its note and delete the conflict file.
 5. Verify or forget each stale candidate.
 6. Read the feedback notes together, merge, promote or retire as in the learning loop.
-7. Read `mem log`, fix the cause of each error in `F:\claude-memory-plugin`, run `uv run python tests/check.py`.
+7. Read `mem log`, fix the cause of each error in `F:\claude-memory-plugin`, run `uv run python tests/check.py`. A failed fetch or push is not logged, the next push retries it, so unpushed commits that stay across sessions mean `git push` in the vault keeps failing. Run it by hand and fix what it says.
 8. Add each injection that brought an unrelated note, and each note a search had to find that should have come in by itself, to `system/recall-eval.jsonl` in the vault. Those labeled cases set the gates in `mem/judge.py`. After adding cases or changing the judge, run `uv run python tests/recall_eval.py` and keep the body gate above every unrelated note.
 9. Once a month, `uv lock --upgrade` in `F:\claude-memory-plugin` and the check again.
 10. `claude plugin validate` on `plugins/memory` and `plugins/memory-pane`, `claude plugin test` on the pane, fix what they report.

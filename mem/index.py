@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 
-from . import vault
+from . import git, vault
 
 DIM = 384
 VEC_MAX = 0.36
@@ -286,8 +286,8 @@ def mentioned_slugs(db, session, agent):
 def injected_rows(db, session):
     return db.execute(
         """select i.slug, i.source, max(i.at) as at, n.title, n.path from injected i join notes n using(slug)
-           where i.session_id=? group by i.slug order by at desc""",
-        (session,),
+           where i.session_id=? and i.source!=? group by i.slug order by at desc""",
+        (session, MENTION),
     ).fetchall()
 
 
@@ -405,15 +405,16 @@ def health(db, project):
     dupes = dupe_pairs(db)
     days = last_pass()
     errors = errors_since_pass()
+    unpushed = git.unpushed()
     line = (
         f"{len(leftovers)} open leftovers ({len(old)} older than {OLD_LEFTOVER_DAYS}d), {len(dupes)} dupe pairs, "
-        f"{len(stale)} stale candidates, {len(conflicts)} conflicts, {errors} hook errors, "
+        f"{len(stale)} stale candidates, {len(conflicts)} conflicts, {errors} hook errors, {unpushed} unpushed commits, "
         f"{feedback_week} corrections this week, last cleanup "
         + (f"{days}d ago" if days is not None else "never")
     )
     return {
         "line": line, "open": len(leftovers), "open_old": len(old), "dupes": len(dupes), "stale": len(stale),
-        "conflicts": len(conflicts), "errors": errors, "days_since_pass": days, "feedback_week": feedback_week,
+        "conflicts": len(conflicts), "errors": errors, "unpushed": unpushed, "days_since_pass": days, "feedback_week": feedback_week,
         "dupe_pairs": dupes, "stale_slugs": [r["slug"] for r in stale], "old_leftovers": [r["slug"] for r in old],
         "conflict_files": conflicts,
     }

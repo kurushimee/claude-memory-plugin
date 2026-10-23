@@ -126,12 +126,17 @@ index.index(db)
 start = {"hook_event_name": "SessionStart", "session_id": "s2", "source": "startup", "cwd": project}
 text = hooks.brief(start)["hookSpecificOutput"]["additionalContext"]
 assert f"edit {away.slug}" in sh("git", "-C", str(bare), "log", "--oneline", "main").stdout, "an edit some other index call saw first never got committed"
+sh("git", "-C", str(vault_dir), "commit", "-q", "--allow-empty", "-m", "offline")
+assert git.unpushed() == 1 and index.health(db, project)["unpushed"] == 1, "a commit no push reached went uncounted"
+git.push()
+assert git.unpushed() == 0
 assert "how to work" in text and fb.title in text and "open leftovers" in text and left.title in text and "health:" in text, text
 assert f"- {ghidra.title} ({ghidra.slug})" in text and "ghidra 12 sits" not in text, "a global note without always comes as a title only"
 assert away.title not in text, "the brief carries nothing from other folders"
 judge.scores = fake_scores
 fits = hooks.recall({**prompt, "session_id": "s2"})["hookSpecificOutput"]["additionalContext"]
 assert ghidra.slug not in fits, "a title the brief listed came again"
+assert ghidra.slug not in {r["slug"] for r in index.injected_rows(db, "s2")}, "a title only note counted as remembered"
 judge.scores = real_scores
 resumed = hooks.brief({**start, "source": "resume"})["hookSpecificOutput"]["additionalContext"]
 assert fb.title not in resumed and left.title not in resumed, resumed
@@ -172,6 +177,10 @@ assert report["notes"] == report["indexed"] == 6 and report["health"]["conflicts
 pane = cli.pane("s2", project)
 assert set(pane) == {"project", "vault", "health", "leftovers", "injected", "counts"} and pane["counts"]["recalled"] > 0
 json.dumps(pane)
+
+moved = cli.save_note("projects", "panel sources", "old take", [], [], project)
+cli.save_note("facts", "panel sources", "new take", [], [], project)
+assert not moved.path.exists() and index.note_row(db, moved.slug)["path"].endswith(f"facts/{moved.slug}.md"), "a save under another type left two files"
 
 for i in range(12):
     cli.save_note("feedback", f"stress note {i}", ("lorem " * 160).strip(), [], [], project)

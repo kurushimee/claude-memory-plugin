@@ -135,11 +135,15 @@ def save_note(type, title, body, tags, links, project):
     if links:
         body = body.rstrip() + "\n\nrelated " + " ".join(f"[[{l}]]" for l in links)
     note = vault.Note(slug=slug, type=type, title=title, body=body, project=project, tags=list(tags))
-    if note.path.exists():
-        note.created = vault.read_note(note.path).created
+    # a save under another type moves the note, since the index holds one note per slug
+    old = [p for t in vault.TYPES if (p := vault.vault_path() / t / f"{slug}.md").exists()]
+    if old:
+        note.created = vault.read_note(old[0]).created
+    for path in old:
+        path.unlink()
     vault.write_note(note)
     index.index(index.connect(vec=True))
-    git.commit([note.path], f"save {slug}")
+    git.commit([note.path, *old], f"save {slug}")
     return note
 
 

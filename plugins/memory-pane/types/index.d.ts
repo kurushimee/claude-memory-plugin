@@ -10,6 +10,7 @@ export type Health = {
   stale: number
   conflicts: number
   errors: number
+  unpushed: number
   days_since_pass: number | null
   feedback_week: number
 }

@@ -80,6 +80,7 @@ function problems(h: Health) {
   if (h.stale > 0) out.push(`${h.stale} stale`)
   if (h.conflicts > 0) out.push(count(h.conflicts, 'conflict'))
   if (h.errors > 0) out.push(count(h.errors, 'hook error'))
+  if (h.unpushed > 0) out.push(`${count(h.unpushed, 'commit')} not pushed`)
   if (h.days_since_pass !== null && h.days_since_pass > 14) out.push(`cleanup ${h.days_since_pass}d ago`)
 
   return out.join(', ')
