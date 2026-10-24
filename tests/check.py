@@ -6,6 +6,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +70,7 @@ assert left.slug in [r["slug"] for r in hits + maybe], "trigram miss"
 hits, maybe = index.search(db, "the thing that stops godot hanging", project=project)
 assert hits and hits[0]["slug"] == godot.slug, [r["slug"] for r in hits]
 assert gpu.slug in [r["slug"] for r in hits + maybe], "link hop miss"
+assert index.by_meaning(db, index.list_notes(db, project), "test runs that never exit")[0]["slug"] == godot.slug
 hits, maybe = index.search(db, "godot", project=project, type="leftovers", vector=False)
 assert not hits or all(r["type"] == "leftovers" for r in hits)
 listed = index.list_notes(db, project, ("leftovers",))
@@ -88,7 +91,13 @@ assert hooks.recall(prompt) is None, "a folder, a body or a title came twice"
 index.stamp_compacted(db, "s0", "")
 again = hooks.recall(prompt)["hookSpecificOutput"]["additionalContext"]
 assert away.title in again and f"## {godot.title}" in again, "not brought again after compaction"
-for event in ("<task-notification>\n<summary>godot run finished</summary>\n</task-notification>", '<agent-message from="a1">\ngodot run finished\n</agent-message>', '<cross-session-message from="s9">\ngodot run finished\n</cross-session-message>'):
+events = (
+    "<task-notification>\n<summary>godot run finished</summary>\n</task-notification>",
+    '<agent-message from="a1">\ngodot run finished\n</agent-message>',
+    '<cross-session-message from="s9">\ngodot run finished\n</cross-session-message>',
+    "<side-sessions-event>the godot session finished its turn\n</side-sessions-event>",
+)
+for event in events:
     assert hooks.recall({**prompt, "session_id": "s0c", "prompt": event}) is None, "a background event went to the judge"
 queries = []
 judge.scores = lambda query, docs: queries.append(query)
@@ -191,6 +200,34 @@ assert all(f"(stress-note-{i})" in text for i in range(12))
 assert 0 < len(shown) < 13 and all(any(l.startswith("## ") and f"({s})" in l for l in lines) for s in shown), shown
 
 if judge.MODEL.exists():
+    hold = "import sys, time\nfrom mem import judge\nwith judge.gpu_turn(time.monotonic() + 5):\n    print('held', flush=True)\n    sys.stdin.read()"
+    holder = subprocess.Popen([sys.executable, "-c", hold], cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert holder.stdout.readline().strip() == "held"
+    try:
+        with judge.gpu_turn(time.monotonic() + 0.5):
+            raise AssertionError("two judges had the GPU at once")
+    except judge.Busy:
+        pass
+    holder.communicate("", timeout=10)
+    with judge.gpu_turn(time.monotonic() + 5) as alone:
+        assert alone, "the GPU stayed taken after the other judge let go"
+
+    @contextmanager
+    def cut_ranker(seconds):
+        def rank(query, docs):
+            ranked.append(docs)
+            if len(ranked) > 1:
+                raise TimeoutError("timed out")
+            return [0.5] * len(docs)
+
+        yield rank
+
+    ranked = []
+    real_ranker, judge.ranker = judge.ranker, cut_ranker
+    assert judge.scores("q", ["d"] * (judge.CHUNK + 1)) == [0.5] * judge.CHUNK, "a judge cut by the deadline dropped what it had scored"
+    ranked = [[]]
+    assert judge.scores("q", ["d"]) == [] and "with the GPU to itself" in (vault.mem_dir() / "mem.log").read_text(encoding="utf-8")
+    judge.ranker = real_ranker
     docs = [hooks.doc_of(db, index.note_row(db, s)) for s in (godot.slug, away.slug)]
     real = judge.scores(hooks.query_of("godot keeps hanging when a test run never exits", ""), docs)
     assert real and real[0] >= judge.BODY_GATE > judge.TITLE_GATE > real[1], real

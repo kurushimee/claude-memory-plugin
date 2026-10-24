@@ -226,6 +226,18 @@ def search(db, query, project=None, type=None, k=8, vector=True):
     return hits, (linked + maybe)[:5]
 
 
+def by_meaning(db, rows, text):
+    """rows closest in meaning to the text first, rows without a vector last"""
+    total = db.execute("select count(*) from vec").fetchone()[0] if vec_loaded(db) else 0
+    qv = embed([text]) if total else None
+    if not qv:
+        return rows
+    from sqlite_vec import serialize_float32
+
+    near = dict(db.execute("select slug, distance from vec where embedding match ? and k = ?", (serialize_float32(qv[0]), total)))
+    return sorted(rows, key=lambda r: near.get(r["slug"], float("inf")))
+
+
 def note_row(db, slug, project=None, type=None):
     row = db.execute("select * from notes where slug=? and status='active'", (slug,)).fetchone()
     if row is None:

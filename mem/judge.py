@@ -19,6 +19,8 @@ MODEL = LLAMA / "qwen3-reranker-4b-q4_k_m.gguf"
 BODY_GATE = 0.45
 TITLE_GATE = 0.1
 DEADLINE = 25
+CHUNK = 4
+OWNED = (0, 0x80)  # WAIT_OBJECT_0, or WAIT_ABANDONED when the holder was killed
 ASK = (
     "Given a user's message to a coding assistant and the assistant's previous reply, judge whether the memory note "
     "is about the specific subject, task or situation of this message. General advice that has nothing to do with "
@@ -26,16 +28,49 @@ ASK = (
 )
 
 
+class Busy(Exception):
+    """the judges of other prompts kept the GPU until the deadline"""
+
+
 def scores(query, docs):
-    """how well each doc fits the query, None when the model can't run here"""
+    """how well each doc fits the query, in order and as far as the deadline reaches, None when the model can't run
+    here. The docs left over come up again on the next prompt, so a cut is no error unless the judge had the GPU to
+    itself and still scored nothing"""
     if not SERVER.exists() or not MODEL.exists():
         return None
+    end = time.monotonic() + DEADLINE
+    out, alone = [], False
     try:
-        with ranker() as rank:
-            return rank(query, docs)
+        with gpu_turn(end) as alone, ranker(end - time.monotonic()) as rank:
+            for i in range(0, len(docs), CHUNK):
+                out += rank(query, docs[i : i + CHUNK])
+    except Busy:
+        pass
+    except TimeoutError as e:
+        if alone and not out:
+            vault.log(f"judge failed with the GPU to itself, no recall by meaning for this prompt: {e!r}")
     except Exception as e:
         vault.log(f"judge failed, no recall by meaning for this prompt: {e!r}")
         return None
+    return out
+
+
+@contextmanager
+def gpu_turn(end):
+    """holds the GPU for one judge on this machine, since two models don't fit in VRAM together and each then runs
+    four times as long. Yields whether it was free at once"""
+    k = kernel32()
+    mutex = k.CreateMutexW(None, False, "Local\\mem-judge")
+    try:
+        alone = k.WaitForSingleObject(mutex, 0) in OWNED
+        if not alone and k.WaitForSingleObject(mutex, int(max(0, end - time.monotonic()) * 1000)) not in OWNED:
+            raise Busy
+        try:
+            yield alone
+        finally:
+            k.ReleaseMutex(mutex)
+    finally:
+        k.CloseHandle(mutex)
 
 
 @contextmanager
@@ -57,7 +92,9 @@ def ranker(seconds=DEADLINE):
         yield lambda query, docs: rerank(port, f"{ASK}\n{query}", docs, end)
     finally:
         server.kill()
-        ctypes.windll.kernel32.CloseHandle(job)
+        kernel32().CloseHandle(job)
+        # the next judge loads only once this one's VRAM is free
+        server.wait(10)
 
 
 def free_port():
@@ -116,14 +153,22 @@ class ExtendedLimits(ctypes.Structure):
 def die_with_this_process(proc):
     """puts proc in a job that Windows kills once this process ends, so a hook killed mid prompt can't leave the
     model sitting in VRAM"""
-    kernel32 = ctypes.windll.kernel32
-    kernel32.CreateJobObjectW.restype = ctypes.c_void_p
-    kernel32.SetInformationJobObject.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
-    kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    job = kernel32.CreateJobObjectW(None, None)
+    k = kernel32()
+    job = k.CreateJobObjectW(None, None)
     limits = ExtendedLimits()
     limits.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    kernel32.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits))  # JobObjectExtendedLimitInformation
-    kernel32.AssignProcessToJobObject(job, int(proc._handle))
+    k.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits))  # JobObjectExtendedLimitInformation
+    k.AssignProcessToJobObject(job, int(proc._handle))
     return job
+
+
+def kernel32():
+    k = ctypes.windll.kernel32
+    k.CreateJobObjectW.restype = ctypes.c_void_p
+    k.CreateMutexW.restype = ctypes.c_void_p
+    k.SetInformationJobObject.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    k.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    k.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    k.ReleaseMutex.argtypes = [ctypes.c_void_p]
+    k.CloseHandle.argtypes = [ctypes.c_void_p]
+    return k

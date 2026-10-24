@@ -1,6 +1,6 @@
 {
   "name": "memory",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "claude's own memory on an obsidian vault, hooks that remind, tools that search and save, a policy that learns",
   "author": { "name": "kurushimee" }
 }

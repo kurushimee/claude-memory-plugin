@@ -9,7 +9,7 @@ TITLES = 30
 TRANSCRIPT_TAIL = 256 * 1024
 REPLY_CHARS = 800
 NO_REPLY = "No response requested."
-EVENTS = ("<task-notification>", "<agent-message ", "<cross-session-message ")
+EVENTS = ("<task-notification>", "<agent-message ", "<cross-session-message ", "<side-sessions-event>")
 REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 POINTER = (
     "the memory skill holds the policy, load it when in doubt. save with memory_save or mem save, "
@@ -200,7 +200,10 @@ def judged(db, session, agent, project, prompt, reply):
     rows = [r for r in index.list_notes(db, project, None, 500) if r["slug"] not in seen]
     if not rows or not prompt.strip():
         return []
-    scores = judge.scores(query_of(prompt, reply), [doc_of(db, r) for r in rows])
+    query = query_of(prompt, reply)
+    # a judge short on time stops early, so it reads the likeliest notes first
+    rows = index.by_meaning(db, rows, query)
+    scores = judge.scores(query, [doc_of(db, r) for r in rows])
     if not scores:
         return []
     ranked = sorted(zip(scores, rows), key=lambda pair: pair[0], reverse=True)
