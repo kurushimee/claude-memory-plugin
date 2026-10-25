@@ -20,6 +20,7 @@ BODY_GATE = 0.45
 TITLE_GATE = 0.1
 DEADLINE = 25
 CHUNK = 4
+NEED = 3800  # MiB of free VRAM, the judge peaked at 3706 on the 2070
 OWNED = (0, 0x80)  # WAIT_OBJECT_0, or WAIT_ABANDONED when the holder was killed
 ASK = (
     "Given a user's message to a coding assistant and the assistant's previous reply, judge whether the memory note "
@@ -32,23 +33,33 @@ class Busy(Exception):
     """the judges of other prompts kept the GPU until the deadline"""
 
 
+class Taken(Exception):
+    """another program, like a game, holds so much VRAM that the judge would spill into system memory and run out of
+    time"""
+
+
 def scores(query, docs):
     """how well each doc fits the query, in order and as far as the deadline reaches, None when the model can't run
-    here. The docs left over come up again on the next prompt, so a cut is no error unless the judge had the GPU to
-    itself and still scored nothing"""
+    here. The docs left over come up again on the next prompt, so a cut is no error unless the judge had a free GPU
+    and still scored nothing. Raises Taken when another program holds the VRAM the judge needs"""
     if not SERVER.exists() or not MODEL.exists():
         return None
     end = time.monotonic() + DEADLINE
     out, alone = [], False
     try:
-        with gpu_turn(end) as alone, ranker(end - time.monotonic()) as rank:
-            for i in range(0, len(docs), CHUNK):
-                out += rank(query, docs[i : i + CHUNK])
+        with gpu_turn(end) as alone:
+            if free_vram() < NEED:
+                raise Taken
+            with ranker(end - time.monotonic()) as rank:
+                for i in range(0, len(docs), CHUNK):
+                    out += rank(query, docs[i : i + CHUNK])
     except Busy:
         pass
+    except Taken:
+        raise
     except TimeoutError as e:
         if alone and not out:
-            vault.log(f"judge failed with the GPU to itself, no recall by meaning for this prompt: {e!r}")
+            vault.log(f"judge scored nothing on a free GPU, no recall by meaning for this prompt: {e!r}")
     except Exception as e:
         vault.log(f"judge failed, no recall by meaning for this prompt: {e!r}")
         return None
@@ -95,6 +106,15 @@ def ranker(seconds=DEADLINE):
         kernel32().CloseHandle(job)
         # the next judge loads only once this one's VRAM is free
         server.wait(10)
+
+
+def free_vram():
+    """MiB of VRAM no program holds"""
+    out = subprocess.run(
+        ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+        capture_output=True, text=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW,
+    ).stdout
+    return int(out.split()[0])
 
 
 def free_port():

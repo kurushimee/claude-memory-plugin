@@ -126,6 +126,14 @@ for bad in ("Bash:(?<=x)godot", "godot", "Bash:(unclosed"):
 health = index.health(db, project)
 assert (health["lessons_week"], health["lessons_by_user"], health["lessons_repeats"]) == (3, 3, 2), health
 assert "3 lessons this week (3 spotted by the user, 2 repeats of a rule)" in health["line"], health["line"]
+mem_log, pass_log = vault_dir / ".mem" / "mem.log", vault_dir / "system" / "log.md"
+logged = mem_log.read_text(encoding="utf-8") if mem_log.exists() else ""
+pass_log.parent.mkdir(exist_ok=True)
+pass_log.write_text("# maintenance log\n\n## 2026-10-25 11:00\n\nread the judge timeouts\n", encoding="utf-8")
+mem_log.write_text("2026-10-25 judge timed out\n2026-10-25 10:59 x\n2026-10-25 11:00 x\n2026-10-26 08:00 x\n  a traceback line\n", encoding="utf-8")
+assert index.errors_since_pass() == 2, "an error from before the last pass still counted, or one after it went uncounted"
+mem_log.write_text(logged, encoding="utf-8")
+pass_log.unlink()
 
 
 def fake_scores(query, docs):
@@ -165,6 +173,14 @@ assert godot.title not in quiet, "something came by meaning without the judge"
 reminded = f"<system-reminder>\nrecent folders {elsewhere}\n</system-reminder>\nwhat now"
 assert away.title not in context(hooks.recall({**prompt, "session_id": "s0d", "prompt": reminded})), "a path in an app reminder counted as the user's"
 assert "recent folders" not in queries[-1] and "what now" in queries[-1], queries[-1]
+
+
+def taken(query, docs):
+    raise judge.Taken
+
+
+judge.scores = taken
+assert hooks.TAKEN in context(hooks.recall({**prompt, "session_id": "s0f", "prompt": "godot keeps hanging"})), "a judge with no room in VRAM went unsaid"
 
 stopped = write_transcript(tmp / "stopped.jsonl", typed("render the probes"), said("rendering"), {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user]"}]}})
 assert "the user stopped your last turn" in context(hooks.recall({**prompt, "session_id": "s0e", "prompt": "no, wrong scene", "transcript_path": stopped}))
@@ -384,8 +400,18 @@ if judge.MODEL.exists():
     real_ranker, judge.ranker = judge.ranker, cut_ranker
     assert judge.scores("q", ["d"] * (judge.CHUNK + 1)) == [0.5] * judge.CHUNK, "a judge cut by the deadline dropped what it had scored"
     ranked = [[]]
-    assert judge.scores("q", ["d"]) == [] and "with the GPU to itself" in (vault.mem_dir() / "mem.log").read_text(encoding="utf-8")
+    assert judge.scores("q", ["d"]) == [] and "on a free GPU" in (vault.mem_dir() / "mem.log").read_text(encoding="utf-8")
+    real_free, judge.free_vram = judge.free_vram, lambda: judge.NEED - 1
+    ranked = []
+    try:
+        judge.scores("q", ["d"])
+        raise AssertionError("the judge went ahead with too little VRAM free")
+    except judge.Taken:
+        pass
+    assert not ranked, "the judge loaded with too little VRAM free"
+    judge.free_vram = real_free
     judge.ranker = real_ranker
+    assert judge.free_vram() > 0
     docs = [hooks.doc_of(db, index.note_row(db, s)) for s in (godot.slug, away.slug)]
     real = judge.scores(hooks.query_of("godot keeps hanging when a test run never exits", ""), docs)
     assert real and real[0] >= judge.BODY_GATE > judge.TITLE_GATE > real[1], real

@@ -20,6 +20,10 @@ LESSON = (
     "if this message points out something you did wrong, first log it with mem lesson --by user as the general "
     "behavior behind it, then go on"
 )
+TAKEN = (
+    "no notes came by meaning with this message, a game or another program holds the gpu memory the judge needs, so "
+    "search memory yourself if this message needs notes"
+)
 ASKED = (
     "asked before in this project. if this is the same question, stop this agent with TaskStop and use what came "
     "back, or say what's different this time"
@@ -248,7 +252,10 @@ def judged(db, session, agent, project, query, room):
         return []
     # a judge short on time stops early, so it reads the likeliest notes first
     rows = index.by_meaning(db, rows, query)
-    scores = judge.scores(query, [doc_of(db, r) for r in rows])
+    try:
+        scores = judge.scores(query, [doc_of(db, r) for r in rows])
+    except judge.Taken:
+        return [room.take(TAKEN)]
     if not scores:
         return []
     ranked = sorted(zip(scores, rows), key=lambda pair: pair[0], reverse=True)

@@ -401,23 +401,35 @@ def dupe_pairs(db):
     return pairs
 
 
-def last_pass():
+STAMP = re.compile(r"(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2})\b)?")
+
+
+def stamp(text):
+    """the date and time a log line or a pass heading starts with, midnight when it has no time"""
+    m = STAMP.match(text)
+    return f"{m[1]} {m[2] or '00:00'}" if m else None
+
+
+def passes():
     log = vault.vault_path() / "system" / "log.md"
     if not log.exists():
-        return None
-    dates = re.findall(r"^## (\d{4}-\d{2}-\d{2})", log.read_text(encoding="utf-8"), re.M)
-    return days_ago(dates[-1]) if dates else None
+        return []
+    return re.findall(r"^## (\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)", log.read_text(encoding="utf-8"), re.M)
+
+
+def last_pass():
+    done = passes()
+    return days_ago(done[-1][:10]) if done else None
 
 
 def errors_since_pass():
+    """the errors logged since the last pass, since the pass read the ones before it"""
     log = vault.mem_dir() / "mem.log"
     if not log.exists():
         return 0
-    entries = [line for line in log.read_text(encoding="utf-8").splitlines() if re.match(r"\d{4}-\d{2}-\d{2} ", line)]
-    since = last_pass()
-    if since is None:
-        return len(entries)
-    return sum(1 for line in entries if days_ago(line[:10]) <= since)
+    done = passes()
+    since = stamp(done[-1]) if done else ""
+    return sum(1 for line in log.read_text(encoding="utf-8").splitlines() if (at := stamp(line)) and at >= since)
 
 
 def lessons_week(db):
