@@ -65,11 +65,13 @@ func cues(p payload) {
 
 	t := loadTurn(filepath.Join(vault, ".mem", "turns", p.SessionID+"+"+p.AgentID+".jsonl"))
 	text := toolText(p.ToolName, p.ToolInput)
-	if path := editedFile(p); path != "" && inScope(vault, normalized(path)) {
-		// a note's file name is its title, free text that would fit any trigger, so only the kind of file counts
-		text = p.ToolName + " " + filepath.Ext(path)
-	}
 	places := placesOf(p.Cwd, text)
+	if path := editedFile(p); path != "" && inScope(vault, normalized(path)) {
+		// a note's file name is its title, free text that would fit any trigger, so only the kind of file counts,
+		// and the edit happens in the vault whatever folder the session works in
+		text = p.ToolName + " " + filepath.Ext(path)
+		places = []string{projectOf(vault)}
+	}
 	logCall(vault, p.ToolName, text, places)
 	var out []string
 

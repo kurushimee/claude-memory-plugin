@@ -309,11 +309,17 @@ index.index(db)
 note_edit = {**call, "session_id": "c5", "tool_name": "Edit", "tool_input": {"file_path": godot.path.as_posix()}}
 assert cue(note_edit) == "", "a vault note's file name fit a trigger"
 assert "godot edits get a test run" in cue({**note_edit, "session_id": "c6", "tool_input": {"file_path": f"{elsewhere.as_posix()}/godot_runner.py"}})
+docs_rule = vault.Note(slug="elsewhere-docs-stay-short", type="rules", title="elsewhere docs stay short", body="why x\n\ncheck y\n\nincidents\n- 2026-10-25 user in x, y", project=elsewhere.as_posix(), when=["Edit:\\.md$"])
+vault.write_note(docs_rule)
+index.index(db)
+from_elsewhere = {**note_edit, "session_id": "c8", "cwd": elsewhere.as_posix()}
+assert cue(from_elsewhere) == "", "a vault note edit counted as work in the session's folder"
+assert "elsewhere docs stay short" in cue({**from_elsewhere, "session_id": "c9", "tool_input": {"file_path": f"{elsewhere.as_posix()}/README.md"}})
 calls_log.write_text("x" * (1 << 20) + "\n", encoding="utf-8")
 cue({**call, "session_id": "c7", "tool_input": {"command": "ls"}})
 old_calls = vault_dir / ".mem" / "calls.old.jsonl"
 assert old_calls.exists() and old_calls.stat().st_size > 1 << 20 and calls_log.stat().st_size < 1000, "the calls log grew past its cap"
-for path in (project_rule.path, vault_dir / "rules" / "look-before-calling-it-done.md", vault_dir / "rules" / "godot-edits-get-a-run.md"):
+for path in (project_rule.path, vault_dir / "rules" / "look-before-calling-it-done.md", vault_dir / "rules" / "godot-edits-get-a-run.md", docs_rule.path):
     path.unlink()
 index.index(db)
 
