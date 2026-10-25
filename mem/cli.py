@@ -78,6 +78,8 @@ def run_hook(name):
         from . import hooks
 
         payload = json.loads(sys.stdin.read() or "{}")
+        # run by hand, like in a cloud session, there is no hook payload to name the folder
+        payload.setdefault("cwd", os.getcwd())
         result = getattr(hooks, name)(payload)
         if result:
             print(json.dumps(result))
