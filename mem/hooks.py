@@ -336,9 +336,12 @@ def answer_of(response):
 
 
 def journal(payload):
-    """an Agent call gets the same questions already asked in this project, and a subagent's answer goes into the
-    journal when it stops"""
+    """an Agent call gets the same questions already asked in this project, and a subagent's report goes into the
+    journal, the message of its SubagentHandback call or, without one, its last message when it stops"""
     project = vault.project_of(payload.get("cwd", ""))
+    if payload.get("tool_name") == "SubagentHandback":
+        attempts.answer(project, payload.get("agent_id") or "", (payload.get("tool_input") or {}).get("message") or "")
+        return None
     if payload.get("hook_event_name") == "SubagentStop":
         attempts.answer(project, payload.get("agent_id") or "", payload.get("last_assistant_message") or "")
         return None

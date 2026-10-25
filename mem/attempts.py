@@ -54,7 +54,9 @@ def ask(project, session, agent, question, prompt, answer=""):
 
 
 def answer(project, agent, text):
-    if agent and text:
+    """only the first answer to a question in the journal, so a squash, which stops like a subagent, and the closing
+    line after a hand back stay out"""
+    if agent and text and any(e["agent"] == agent and not e["answer"] for e in read(project)):
         append(project, {"agent": agent, "answer": text[:ANSWER]})
 
 

@@ -251,6 +251,12 @@ sibling = {**asked, "tool_input": {"description": "Extract flatland-rc part 1", 
 hooks.journal(sibling)
 assert hooks.journal({**sibling, "tool_input": {"description": "Extract flatland-rc part 15", "prompt": "x"}}) is None, "a sibling of a batch counted as asked before"
 assert [e["answer"] for e in attempts.read(project)][:4] == ["found nothing on the abl timing", "", "part 1 facts", "part 1 facts"]
+hooks.journal({**asked, "tool_input": {"description": "Count the vault rules", "prompt": "count"}, "tool_response": {"status": "async_launched", "agentId": "ag4"}})
+hooks.journal({"hook_event_name": "PostToolUse", "cwd": project, "agent_id": "ag4", "tool_name": "SubagentHandback", "tool_input": {"message": "35 rules"}})
+hooks.journal({"hook_event_name": "SubagentStop", "cwd": project, "agent_id": "ag4", "last_assistant_message": "handing it back"})
+hooks.journal({"hook_event_name": "SubagentStop", "cwd": project, "agent_id": "squash", "last_assistant_message": "the squash summary"})
+assert "squash summary" not in attempts.journal_path(project).read_text(encoding="utf-8"), "an answer to no question got journaled"
+assert attempts.read(project)[-1]["answer"] == "35 rules", "a handed back report never became the answer"
 
 away.path.write_text(away.path.read_text(encoding="utf-8") + "\nand cmake 3.30\n", encoding="utf-8")
 index.index(db)
