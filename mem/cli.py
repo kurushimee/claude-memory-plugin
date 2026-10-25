@@ -10,7 +10,7 @@ from . import git, index, vault
 
 HOOKS = ("brief", "recall", "journal")
 SAVED = tuple(t for t in vault.TYPES if t != "rules")
-FILE = re.compile(r"[\w./-]*\w\.[A-Za-z]{1,4}\b")
+FILE = re.compile(r"[\w./-]*\w\.[A-Za-z]\w{0,7}\b")
 
 
 def main():

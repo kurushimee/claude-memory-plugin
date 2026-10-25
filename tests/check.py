@@ -417,6 +417,8 @@ def commit_code(message, at):
         subprocess.run(["git", "-C", str(code), *args], env={**os.environ, "GIT_COMMITTER_DATE": at}, capture_output=True, check=True)
 
 
+named = "tools/session.ps1 runs engine/nvidia_path_tracer.patch and logs to calls.jsonl at 0.5 s"
+assert set(cli.FILE.findall(named)) == {"tools/session.ps1", "engine/nvidia_path_tracer.patch", "calls.jsonl"}, cli.FILE.findall(named)
 code = tmp / "code"
 (code / "src").mkdir(parents=True)
 (code / "src" / "thing.py").write_text("read()\n")
