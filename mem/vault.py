@@ -1,7 +1,7 @@
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 TYPES = ("facts", "rules", "projects", "leftovers")
@@ -31,7 +31,8 @@ def mem_dir():
 
 def log(text):
     with open(mem_dir() / "mem.log", "a", encoding="utf-8") as f:
-        f.write(f"{date.today().isoformat()} {text.rstrip()}\n")
+        # the time of day lets an error be matched against what else ran then
+        f.write(f"{datetime.now():%Y-%m-%d %H:%M} {text.rstrip()}\n")
 
 
 def today():
