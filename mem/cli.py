@@ -1,12 +1,16 @@
 import json
 import os
+import re
 import sys
 import traceback
+from datetime import datetime
+from pathlib import Path
 
 from . import git, index, vault
 
 HOOKS = ("brief", "recall", "journal")
 SAVED = tuple(t for t in vault.TYPES if t != "rules")
+FILE = re.compile(r"[\w./-]*\w\.[A-Za-z]{1,4}\b")
 
 
 def main():
@@ -55,7 +59,7 @@ def parse(argv):
     s.add_argument("--new", metavar="TITLE", help="a new rule, the general behavior, with --why and --check")
     s.add_argument("--sharpen", metavar="TITLE", help="a sharper title for the --rule")
     s.add_argument("--why")
-    s.add_argument("--check", help="what to run or look at that catches it")
+    s.add_argument("--check", help="what to run or look at that catches it, added to an existing rule's check")
     s.add_argument("--when", nargs="*", default=[], help="Tool:regex triggers for mem-gate, like Bash|PowerShell:godot")
     s.add_argument("--scope", default="global", help="the project a new rule holds in, global by default")
     sub.add_parser("done", help="mark a leftover done").add_argument("slug")
@@ -152,6 +156,13 @@ def save_note(type, title, body, tags, links, project):
     slug = vault.slugify(title)
     if links:
         body = body.rstrip() + "\n\nrelated " + " ".join(f"[[{l}]]" for l in links)
+    if missing := [l for l in vault.links(body) if l not in vault.slugs()]:
+        raise SystemExit(f"no note {', '.join(missing)}, link only to notes that exist")
+    if len(body) > vault.BODY_MAX:
+        raise SystemExit(
+            f"the body has {len(body)} characters, a note stays under {vault.BODY_MAX} so a hook can carry it next to "
+            "others. keep only what a later task needs, or split it by subject"
+        )
     note = vault.Note(slug=slug, type=type, title=title, body=body, project=project, tags=list(tags))
     # a save under another type moves the note, since the index holds one note per slug
     old = [p for t in vault.TYPES if (p := vault.vault_path() / t / f"{slug}.md").exists()]
@@ -220,8 +231,57 @@ def check_report():
         "reindexed": len(changed),
         "removed": len(gone),
         "health": health,
+        "triggers": trigger_reach(),
+        "behind": behind_code(),
         "log_tail": log.read_text(encoding="utf-8").splitlines()[-10:] if log.exists() else [],
     }
+
+
+def trigger_reach():
+    """each trigger with the recent calls in its rule's scope it fits, the ones fitting most first"""
+    from . import rules
+
+    path = vault.mem_dir() / "triggers.json"
+    calls = rules.recent_calls()
+    out = []
+    for t in json.loads(path.read_text(encoding="utf-8")) if path.exists() else []:
+        when = f"{t['tool']}:{t['pattern']}"
+        fits, total = rules.reach(when, t["project"], calls)
+        out.append({"slug": t["slug"], "when": when, "fits": len(fits), "total": total, "like": list(dict.fromkeys(fits))[:2]})
+    return sorted(out, key=lambda t: -t["fits"] / max(t["total"], 1))
+
+
+def behind_code():
+    """notes naming a file of their project that a commit changed after the note last changed, so what the note says
+    about it may no longer hold"""
+    db = index.connect()
+    root = vault.vault_path()
+    noted = git.last_changes(root, None, *SAVED)
+    edited = set(git.edited())
+    projects = {}
+    for r in db.execute("select slug, path, project from notes where status='active' and type!='rules' and project!='global'"):
+        path = Path(r["path"])
+        when = mtime(path) if path in edited else noted.get(path.relative_to(root).as_posix())
+        if when:
+            projects.setdefault(r["project"], []).append((r["slug"], when))
+    out = []
+    for project, notes in projects.items():
+        changed = git.last_changes(project, min(when for _, when in notes))
+        for slug, when in notes:
+            names = set(FILE.findall(index.body_of(db, slug)))
+            files = [f for f, at in changed.items() if at > when and any(names_file(n, f) for n in names)]
+            if files:
+                out.append({"slug": slug, "files": sorted(files)})
+    return out
+
+
+def mtime(path):
+    return datetime.fromtimestamp(path.stat().st_mtime).astimezone()
+
+
+def names_file(name, path):
+    """a name in a note, bare, under the project or absolute, names a path in the repo by its tail"""
+    return path == name or path.endswith("/" + name) or name.endswith("/" + path)
 
 
 def render_check(r):
@@ -240,6 +300,18 @@ def render_check(r):
         out.append("stale candidates " + ", ".join(h["stale_slugs"]))
     if h["conflict_files"]:
         out.append("conflicts " + ", ".join(h["conflict_files"]))
+    if h["dead_links"]:
+        out.append("dead links " + ", ".join(f"{s} -> {link}" for s, link in h["dead_links"]))
+    if h["long_bodies"]:
+        out.append("bodies over the cap " + ", ".join(h["long_bodies"]))
+    if r["triggers"]:
+        out.append("triggers by the share of recent calls in scope they fit, each should fit only calls its rule speaks to")
+        for t in r["triggers"]:
+            out.append(f"{t['fits']}/{t['total']} {t['slug']} {t['when']}")
+            out += [f"  {' '.join(text.split())[:100]}" for text in t["like"]]
+    if r["behind"]:
+        out.append("notes naming files a commit changed after the note, check what each says against them")
+        out += [f"{b['slug']} {', '.join(b['files'])}" for b in r["behind"]]
     if r["log_tail"]:
         out.append("log tail\n" + "\n".join(r["log_tail"]))
     return "\n".join(out)

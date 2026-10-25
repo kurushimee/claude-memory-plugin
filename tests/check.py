@@ -1,6 +1,7 @@
 import gc
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -8,7 +9,7 @@ import sys
 import tempfile
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,8 +65,8 @@ def said(text):
     return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}
 
 
-godot = cli.save_note("facts", "godot runs must end themselves", "every godot run started for a test has to exit on its own, see [[one-gpu-job-at-a-time]]", ["godot", "testing"], [], project)
 gpu = cli.save_note("facts", "one gpu job at a time", "never start two gpu jobs at once on the 2070", ["gpu"], [], project)
+godot = cli.save_note("facts", "godot runs must end themselves", "every godot run started for a test has to exit on its own, see [[one-gpu-job-at-a-time]]", ["godot", "testing"], [], project)
 left = cli.save_note("leftovers", "finish the cascade probe debug view", "the probe view in radiance-cascades is half done, next step is wiring the toggle", [], [], project)
 added = rules.lesson(
     "a two word prompt hid the biggest job of the day", "user", "global", new="never size the effort by how long the prompt is",
@@ -84,6 +85,14 @@ try:
     raise AssertionError("a rule got saved around mem lesson")
 except SystemExit:
     pass
+refused = (("see [[no-such-note]]", [], "a dead link"), ("x", ["no-such-note"], "a dead link passed as links"), ("a" * (vault.BODY_MAX + 1), [], "a body over the cap"))
+for body, links, why in refused:
+    try:
+        cli.save_note("facts", "a note that should not save", body, [], links, "global")
+        raise AssertionError(f"{why} got saved")
+    except SystemExit:
+        pass
+assert not (vault_dir / "facts" / "a-note-that-should-not-save.md").exists()
 
 db = index.connect(vec=True)
 assert index.index(db) == ([], set())
@@ -108,12 +117,18 @@ assert [r["slug"] for r in listed] == [left.slug]
 
 closest = rules.lesson("left a capture running past its deadline", "self", project)
 assert closest.startswith("closest rules") and f"[{fb.slug}]" in closest and "global has 1 of 20" in closest, closest
-again = rules.lesson("sized a two word prompt as a small job", "user", project, rule=fb.slug)
-assert "2 incidents now" in again and "didn't catch this case" in again, again
+try:
+    rules.lesson("sized a two word prompt as a small job", "user", project, rule=fb.slug)
+    raise AssertionError("a user lesson got in without making the rule catch the case")
+except SystemExit as e:
+    assert "didn't catch this case in time" in str(e), e
+again = rules.lesson("sized a two word prompt as a small job", "user", project, rule=fb.slug, check="count what the prompt asks for")
+assert "2 incidents now" in again, again
 sharpened = "never size the effort of a task by the length of its prompt"
 rules.lesson("treated a short prompt as a small job again", "user", project, rule=fb.slug, sharpen=sharpened, check="read what the prompt asks for, then size it", when=["Agent:research"])
 fb = vault.read_note(fb.path)
-assert fb.title == sharpened and fb.slug == "never-size-the-effort-by-how-long-the-prompt-is" and vault.section(fb.body, "check").startswith("read what")
+grown = "size the work by what it asks for. count what the prompt asks for. read what the prompt asks for, then size it"
+assert fb.title == sharpened and fb.slug == "never-size-the-effort-by-how-long-the-prompt-is" and vault.section(fb.body, "check") == grown, fb.body
 assert [who for _, who in vault.incidents(fb.body)] == ["user"] * 3 and fb.when == ["Bash|PowerShell:godot", "Agent:research"]
 triggers = json.loads((vault_dir / ".mem" / "triggers.json").read_text(encoding="utf-8"))
 assert {(t["tool"], t["pattern"]) for t in triggers} == {("Bash|PowerShell", "godot"), ("Agent", "research")} and triggers[0]["title"] == sharpened
@@ -123,9 +138,42 @@ for bad in ("Bash:(?<=x)godot", "godot", "Bash:(unclosed"):
         raise AssertionError(f"a trigger mem-gate can't run got in, {bad}")
     except SystemExit:
         pass
+too_long = (
+    ({"what": "x" * (rules.WHAT_MAX + 1), "rule": fb.slug}, "a what past its cap"),
+    ({"what": "x", "rule": fb.slug, "check": "y" * rules.CHECK_MAX}, "a check grown past its cap"),
+    ({"what": "x", "new": "a rule with a long check", "why": "x", "check": "y" * (rules.CHECK_MAX + 1)}, "a new check past its cap"),
+)
+for args, why in too_long:
+    try:
+        rules.lesson(by="self", place=project, **args)
+        raise AssertionError(f"{why} got in")
+    except SystemExit:
+        pass
+assert len(vault.incidents(vault.read_note(fb.path).body)) == 3, "a refused lesson still logged its incident"
+calls_log = vault_dir / ".mem" / "calls.jsonl"
+logged_calls = [
+    {"tool": "Bash", "text": "Bash cmake --build build", "places": [project]},
+    {"tool": "Bash", "text": "Bash ls", "places": [project]},
+    {"tool": "Bash", "text": "Bash cmake --build far", "places": [elsewhere.as_posix()]},
+]
+calls_log.write_text("".join(json.dumps(c) + "\n" for c in logged_calls), encoding="utf-8")
+fit_lines = rules.reach_lines(["Bash:cmake"], project)
+assert fit_lines[:2] == ["Bash:cmake fits 1 of the last 2 calls in scope, like", "  Bash cmake --build build"] and fit_lines[-1].startswith("narrow"), fit_lines
+calls_log.unlink()
 health = index.health(db, project)
 assert (health["lessons_week"], health["lessons_by_user"], health["lessons_repeats"]) == (3, 3, 2), health
 assert "3 lessons this week (3 spotted by the user, 2 repeats of a rule)" in health["line"], health["line"]
+assert not re.search(r"\b0 (dupe|stale|conflicts|hook|unpushed|dead|bodies)", health["line"]), health["line"]
+dead_note = vault.Note(slug="points-nowhere", type="facts", title="points nowhere", body="see [[no-such-note]]", project=project)
+long_note = vault.Note(slug="runs-long", type="facts", title="runs long", body="a" * (vault.BODY_MAX + 1), project=project)
+for n in (dead_note, long_note):
+    vault.write_note(n)
+index.index(db)
+health = index.health(db, project)
+assert (health["dead"], health["long"]) == (1, 1) and "1 dead links" in health["line"] and f"1 bodies over {vault.BODY_MAX}" in health["line"], health["line"]
+for n in (dead_note, long_note):
+    n.path.unlink()
+index.index(db)
 mem_log, pass_log = vault_dir / ".mem" / "mem.log", vault_dir / "system" / "log.md"
 logged = mem_log.read_text(encoding="utf-8") if mem_log.exists() else ""
 pass_log.parent.mkdir(exist_ok=True)
@@ -214,6 +262,7 @@ def cue(payload):
 bash_path = f"/{elsewhere.as_posix()[0].lower()}{elsewhere.as_posix()[2:]}/src"
 gated = {**tool, "session_id": "g1", "tool_input": {"command": f"ls {bash_path}"}}
 assert gate({**gated, "tool_input": {"command": "git status"}}) == ""
+assert gate({**gated, "agent_id": "a1"}) == "", "a subagent's call brought notes, which the app hands to the main session"
 assert away.title in gate(gated), "the gate kept back a folder entry"
 assert gate(gated) == "", "the gate let a reached folder through"
 assert gate({**gated, "tool_input": {"file_path": f"{project}/facts/x.md"}}) == ""
@@ -222,7 +271,8 @@ call = {"hook_event_name": "PostToolUse", "session_id": "c1", "agent_id": "", "c
 started = time.perf_counter()
 found = cue(call)
 took = time.perf_counter() - started
-assert found.startswith(f"a rule fits this call, {sharpened}\ncheck read what"), found
+assert found.startswith(f"a rule fits this call, {sharpened}\ncheck {grown}"), found
+assert {"tool": "Bash", "text": "Bash godot --headless -s capture.gd", "places": [project]} in [json.loads(l) for l in calls_log.read_text(encoding="utf-8").splitlines()]
 assert cue(call) == "", "a rule came twice in one turn"
 assert cue({**call, "session_id": "c0", "tool_name": "Read"}) == "", "a rule fired on a tool its trigger doesn't name"
 assert cue({**call, "session_id": "c0", "tool_input": {"command": "ls"}}) == "", "a rule fired on a call its pattern doesn't fit"
@@ -254,7 +304,16 @@ wrapped = {**call, "session_id": "c4", "tool_name": "mcp__ccd_turn__wrap_up", "t
 vault.write_note(vault.Note(slug="look-before-calling-it-done", type="rules", title="look at the result before calling it done", body="why x\n\ncheck y\n\nincidents\n- 2026-10-25 user in x, y", when=["mcp__ccd_turn__wrap_up:."]))
 index.index(db)
 assert "look at the result" in cue(wrapped), "an MCP tool trigger never fired"
-for path in (project_rule.path, vault_dir / "rules" / "look-before-calling-it-done.md"):
+vault.write_note(vault.Note(slug="godot-edits-get-a-run", type="rules", title="godot edits get a test run", body="why x\n\ncheck y\n\nincidents\n- 2026-10-25 user in x, y", when=["Edit:godot"]))
+index.index(db)
+note_edit = {**call, "session_id": "c5", "tool_name": "Edit", "tool_input": {"file_path": godot.path.as_posix()}}
+assert cue(note_edit) == "", "a vault note's file name fit a trigger"
+assert "godot edits get a test run" in cue({**note_edit, "session_id": "c6", "tool_input": {"file_path": f"{elsewhere.as_posix()}/godot_runner.py"}})
+calls_log.write_text("x" * (1 << 20) + "\n", encoding="utf-8")
+cue({**call, "session_id": "c7", "tool_input": {"command": "ls"}})
+old_calls = vault_dir / ".mem" / "calls.old.jsonl"
+assert old_calls.exists() and old_calls.stat().st_size > 1 << 20 and calls_log.stat().st_size < 1000, "the calls log grew past its cap"
+for path in (project_rule.path, vault_dir / "rules" / "look-before-calling-it-done.md", vault_dir / "rules" / "godot-edits-get-a-run.md"):
     path.unlink()
 index.index(db)
 
@@ -341,6 +400,33 @@ json.dumps(pane)
 moved = cli.save_note("projects", "panel sources", "old take", [], [], project)
 cli.save_note("facts", "panel sources", "new take", [], [], project)
 assert not moved.path.exists() and index.note_row(db, moved.slug)["path"].endswith(f"facts/{moved.slug}.md"), "a save under another type left two files"
+
+
+def minutes_ago(n):
+    return (datetime.now(timezone.utc) - timedelta(minutes=n)).isoformat()
+
+
+def commit_code(message, at):
+    for args in (("add", "-A"), ("commit", "-q", "-m", message)):
+        subprocess.run(["git", "-C", str(code), *args], env={**os.environ, "GIT_COMMITTER_DATE": at}, capture_output=True, check=True)
+
+
+code = tmp / "code"
+(code / "src").mkdir(parents=True)
+(code / "src" / "thing.py").write_text("read()\n")
+for args in (("init", "-q"), ("config", "user.email", "code@mem"), ("config", "user.name", "code")):
+    sh("git", "-C", str(code), *args)
+commit_code("thing", minutes_ago(20))
+os.environ["GIT_COMMITTER_DATE"] = minutes_ago(10)
+old_take = cli.save_note("facts", "thing reads its config at start", "src/thing.py reads config.toml once at start", [], [], code.as_posix())
+del os.environ["GIT_COMMITTER_DATE"]
+assert cli.behind_code() == [], "a note newer than its code counted as behind"
+(code / "src" / "thing.py").write_text("read()\nwatch()\n")
+commit_code("watch", minutes_ago(5))
+new_take = cli.save_note("facts", "thing watches its config", "src/thing.py rereads config.toml when it changes", [], [], code.as_posix())
+assert cli.behind_code() == [{"slug": old_take.slug, "files": ["src/thing.py"]}], cli.behind_code()
+for note in (old_take, new_take):
+    cli.forget_note(note.slug)
 
 # a full rulebook, a long leftover list and many long notes still fit under the cap the app cuts at
 for i in range(rules.CAP["global"] - 1):

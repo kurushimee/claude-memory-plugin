@@ -1,4 +1,5 @@
 import subprocess
+from datetime import datetime
 
 from . import vault
 
@@ -70,6 +71,20 @@ def push():
     """a failed push leaves its commits for the next one, and health counts what is still unpushed"""
     if has_remote():
         git("push", "-q", timeout=NET_TIMEOUT)
+
+
+def last_changes(repo, since=None, *paths):
+    """when a commit last changed each file of a repo, by its path in the repo, empty for a folder without git"""
+    window = [f"--since={since.isoformat()}"] if since else []
+    cmd = ["git", "-C", str(repo), "log", *window, "--format=@%cI", "--name-only", "--", *paths]
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    out, when = {}, None
+    for line in r.stdout.splitlines():
+        if line.startswith("@"):
+            when = datetime.fromisoformat(line[1:])
+        elif line:
+            out.setdefault(line, when)
+    return out
 
 
 def unpushed():

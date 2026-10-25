@@ -51,7 +51,7 @@ def memory_show(slug: str) -> str:
 def memory_save(
     type: str, title: str, body: str, tags: list[str] | None = None, links: list[str] | None = None, project: str | None = None
 ) -> str:
-    """save one memory. type is facts, projects or leftovers, mistakes go through memory_lesson. project is a git root like F:/radiance-cascades or global. an existing slug gets its body replaced"""
+    """save one memory. type is facts, projects or leftovers, mistakes go through memory_lesson. project is a git root like F:/radiance-cascades or global. an existing slug gets its body replaced. the title is the claim itself. the body holds what holds now and why, under 3000 characters, with no history or session narration and nothing the repo's docs, the code or a rule already say"""
     note = cli.save_note(type, title, body, tags or [], links or [], project or "global")
     return f"saved {note.slug} at {note.path.as_posix()}"
 
@@ -69,7 +69,7 @@ def memory_lesson(
     when: list[str] | None = None,
     scope: str = "global",
 ) -> str:
-    """log a mistake. by is self when you spotted it, user when the user had to. call it first with only what, by and project (where it happened) to see the closest rules, then again with rule set to the slug it is another incident of, adding sharpen, check or when if the rule missed this case, or with new set to the title of a new general rule plus why, check, when (Tool:regex triggers) and scope (global or the project it holds in)"""
+    """log a mistake. what is one line. by is self when you spotted it, user when the user had to. project is where it happened, a git root like F:/radiance-cascades or global. call it first with only what, by and project to see the closest rules, then again with rule set to the slug it is another incident of, adding sharpen, check (a sentence the rule's check gains) or when if the rule missed this case, which a user lesson always needs, or with new set to the title of a new general rule plus why, check, when (Tool:regex triggers) and scope (global or the project it holds in)"""
     from . import rules
 
     return rules.lesson(what, by, project, rule, new, sharpen, why, check, when or [], scope)

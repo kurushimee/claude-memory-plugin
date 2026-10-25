@@ -16,6 +16,7 @@ import (
 const (
 	editsEvery     = 5
 	transcriptTail = 64 << 10
+	callsMax       = 1 << 20
 	failedCue      = "this call failed. if the cause was your own slip and not the environment, fix it, then log the general behavior behind it with mem lesson --by self"
 	repeatCue      = "this exact call already failed earlier this turn. stop retrying and find the cause first"
 	heardCue       = "the user sent a message while you worked. if it points out something you did wrong, first log it with mem lesson --by user as the general behavior behind it, then go on"
@@ -64,6 +65,12 @@ func cues(p payload) {
 
 	t := loadTurn(filepath.Join(vault, ".mem", "turns", p.SessionID+"+"+p.AgentID+".jsonl"))
 	text := toolText(p.ToolName, p.ToolInput)
+	if path := editedFile(p); path != "" && inScope(vault, normalized(path)) {
+		// a note's file name is its title, free text that would fit any trigger, so only the kind of file counts
+		text = p.ToolName + " " + filepath.Ext(path)
+	}
+	places := placesOf(p.Cwd, text)
+	logCall(vault, p.ToolName, text, places)
 	var out []string
 
 	if p.HookEventName == "PostToolUseFailure" && !p.IsInterrupt {
@@ -80,7 +87,7 @@ func cues(p payload) {
 	if p.AgentID == "" && t.heardUser(p.TranscriptPath) {
 		out = append(out, heardCue)
 	}
-	out = append(out, t.rules(vault, p, text)...)
+	out = append(out, t.rules(vault, p.ToolName, text, places)...)
 	t.save()
 
 	if len(out) == 0 {
@@ -224,18 +231,39 @@ func (t *turn) heardUser(transcript string) bool {
 	return found
 }
 
-// rules brings up each rule whose trigger fits the call once per turn, in the session's project and in the
-// folders the call's paths lead into.
-func (t *turn) rules(vault string, p payload, text string) []string {
+// placesOf is the session's project and the folders the call's paths lead into, where a rule's scope has to reach.
+func placesOf(cwd, text string) []string {
+	places := []string{projectOf(cwd)}
+	for _, path := range pathsIn(text) {
+		places = append(places, projectOf(path))
+	}
+	return places
+}
+
+// logCall keeps the recent calls, so mem can show what a trigger would fit before it goes in. Past callsMax the
+// file moves to calls.old.jsonl, which keeps the log between one and two of those long.
+func logCall(vault, tool, text string, places []string) {
+	path := filepath.Join(vault, ".mem", "calls.jsonl")
+	if info, err := os.Stat(path); err == nil && info.Size() > callsMax {
+		os.Rename(path, filepath.Join(vault, ".mem", "calls.old.jsonl"))
+	}
+
+	line, _ := json.Marshal(map[string]any{"tool": tool, "text": text, "places": places})
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.Write(append(line, '\n'))
+}
+
+// rules brings up each rule whose trigger fits the call once per turn, where the rule's scope reaches one of the
+// call's places.
+func (t *turn) rules(vault, tool, text string, places []string) []string {
 	raw, err := os.ReadFile(filepath.Join(vault, ".mem", "triggers.json"))
 	var triggers []trigger
 	if err != nil || json.Unmarshal(raw, &triggers) != nil {
 		return nil
-	}
-
-	places := []string{projectOf(p.Cwd)}
-	for _, path := range pathsIn(text) {
-		places = append(places, projectOf(path))
 	}
 
 	var out []string
@@ -243,7 +271,7 @@ func (t *turn) rules(vault string, p payload, text string) []string {
 		if t.cued[tr.Slug] || !slices.ContainsFunc(places, func(place string) bool { return inScope(tr.Project, place) }) {
 			continue
 		}
-		if !matches("^(?:"+tr.Tool+")$", p.ToolName) || !matches(tr.Pattern, text) {
+		if !matches("^(?:"+tr.Tool+")$", tool) || !matches(tr.Pattern, text) {
 			continue
 		}
 

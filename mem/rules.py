@@ -10,8 +10,12 @@ from . import git, index, vault
 
 CAP = {"global": 20, "project": 15}
 TITLE_MAX = 140
+WHAT_MAX = 200
+CHECK_MAX = 800  # every cue carries the whole check
 CLOSEST = 3
 FOR_TURN = 5
+EXAMPLES = 3
+CALLS = ("calls.old.jsonl", "calls.jsonl")
 # mem-gate runs the triggers with Go's RE2, which has no lookaround and no backreferences
 NOT_RE2 = re.compile(r"\(\?<?[=!]|\\[1-9]")
 CODE_FIX = "if a tool, script or harness let this happen, fix that code too in this turn, so it can't happen the same way again"
@@ -71,6 +75,8 @@ def lesson(what, by, place, rule=None, new=None, sharpen=None, why=None, check=N
     """logs a mistake, as an incident of an existing rule or as a new rule, and with neither says which rules are
     closest"""
     what = " ".join(what.split())
+    if len(what) > WHAT_MAX:
+        raise SystemExit(f"say what went wrong in one line under {WHAT_MAX} characters, the check holds the detail")
     when = list(when)
     if error := triggers_error(when):
         raise SystemExit(error)
@@ -106,21 +112,24 @@ def strengthen(db, slug, entry, by, sharpen, check, when):
     path = vault.vault_path() / "rules" / f"{slug}.md"
     if not path.exists():
         raise SystemExit(f"no rule {slug}, mem lesson without --rule lists the closest ones")
+    if by == "user" and not (sharpen or check or when):
+        raise SystemExit(
+            "the user had to point this out, so the rule didn't catch this case in time. log it in one call that also "
+            "makes the rule catch it, with --sharpen, --check or --when"
+        )
     note = vault.read_note(path)
+    if check:
+        old = vault.section(note.body, "check")
+        check = check_within(f"{old}. {check}" if old else check, path)
+        note.body = with_section(note.body, "check", check)
     note.body = note.body.rstrip() + "\n" + entry
     if sharpen:
         note.title = sharpen
-    if check:
-        note.body = with_section(note.body, "check", check)
-    note.when = list(dict.fromkeys(note.when + when))
+    added = [w for w in dict.fromkeys(when) if w not in note.when]
+    note.when += added
     note.updated = vault.today()
     save(note, f"lesson {slug}")
-    out = [f"strengthened {slug}, {len(vault.incidents(note.body))} incidents now"]
-    if by == "user" and not (sharpen or check or when):
-        out.append(
-            "the user had to point out something this rule already covers, so it didn't catch this case in time. "
-            f"make it catch it with mem lesson again on --rule {slug} with --sharpen, --check or --when"
-        )
+    out = [f"strengthened {slug}, {len(vault.incidents(note.body))} incidents now", *reach_lines(added, note.project)]
     return "\n".join(out + [CODE_FIX])
 
 
@@ -129,6 +138,7 @@ def add(db, title, entry, why, check, when, scope):
         raise SystemExit("a new rule needs --why and --check")
     if len(title) > TITLE_MAX:
         raise SystemExit(f"the title is the rule and stays under {TITLE_MAX} characters, say it more generally")
+    check_within(check)
     slug = vault.slugify(title)
     if (vault.vault_path() / "rules" / f"{slug}.md").exists():
         raise SystemExit(f"rule {slug} exists, strengthen it with --rule {slug}")
@@ -141,7 +151,55 @@ def add(db, title, entry, why, check, when, scope):
         )
     body = f"why {why}\n\ncheck {check}\n\nincidents\n{entry}"
     save(vault.Note(slug=slug, type="rules", title=title, body=body, project=scope, when=when), f"rule {slug}")
-    return f"added rule {slug}\n{CODE_FIX}"
+    return "\n".join([f"added rule {slug}", *reach_lines(when, scope), CODE_FIX])
+
+
+def check_within(check, path=None):
+    if len(check) <= CHECK_MAX:
+        return check
+    where = f"the check in {path.as_posix()}" if path else "it"
+    raise SystemExit(
+        f"the check would have {len(check)} characters, past {CHECK_MAX}, and every cue carries all of it. rewrite "
+        f"{where} shorter so it still catches every incident, then log the lesson again"
+    )
+
+
+def recent_calls():
+    """the tool calls mem-gate logged lately, with the places each one reached"""
+    out = []
+    for name in CALLS:
+        path = vault.mem_dir() / name
+        if not path.exists():
+            continue
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            try:
+                out.append(json.loads(raw))
+            except ValueError:
+                continue
+    return out
+
+
+def reach(when, project, calls):
+    """the texts of the calls in the rule's scope that a trigger fits, and how many calls were in its scope"""
+    tool, _, pattern = when.partition(":")
+    here = [c for c in calls if any(vault.in_scope(project, p) for p in c.get("places") or [])]
+    fits = [c["text"] for c in here if re.fullmatch(tool, c["tool"], re.I) and re.search(pattern, c["text"], re.I)]
+    return fits, len(here)
+
+
+def reach_lines(when, project):
+    """what each new trigger would have fit lately, so one that fires where the rule has nothing to say shows now"""
+    calls = recent_calls()
+    out = []
+    for w in when:
+        fits, total = reach(w, project, calls)
+        if not total:
+            continue
+        out.append(f"{w} fits {len(fits)} of the last {total} calls in scope" + (", like" if fits else ""))
+        out += [f"  {' '.join(text.split())[:120]}" for text in list(dict.fromkeys(reversed(fits)))[:EXAMPLES]]
+    if any(line.startswith("  ") for line in out):
+        out.append("narrow the rule's when line by hand if any of these is a call the rule has nothing to say about")
+    return out
 
 
 def with_section(body, word, text):
@@ -169,7 +227,7 @@ def closest(db, what, by, place):
         out += [f"{line(db, r)} [{r['slug']}]", f"  check {check}"]
     out += [
         f'if one covers it, strengthen it with mem lesson "<what>" --by {by} --rule <slug>, and when it missed this '
-        'case add --sharpen "<title>", --check "<check>" or --when "Tool:regex"',
+        'case add --sharpen "<title>", --check "<a sentence the check gains>" or --when "Tool:regex"',
         "if none does, write the general behavior behind it, not this one case, with --new \"<title>\" --why \"...\" "
         '--check "..." --when "Tool:regex", plus --scope <project> when it only holds there',
         counts(db, place),

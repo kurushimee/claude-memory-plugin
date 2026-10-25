@@ -59,6 +59,11 @@ func main() {
 }
 
 func mayBringNotes(p payload) bool {
+	// the app hands an async hook's output from a subagent's call to the main session, which never went there
+	if p.AgentID != "" {
+		return false
+	}
+
 	vault := vaultPath()
 	text := toolText(p.ToolName, p.ToolInput)
 	if vault == "" || touchesMemory(text, vault) {

@@ -446,6 +446,18 @@ def lessons_week(db):
     }
 
 
+def dead_links(db):
+    """links to notes that don't exist, as (slug, link)"""
+    slugs = {r[0] for r in db.execute("select slug from notes")}
+    return [(s, link) for s in sorted(slugs) for link in vault.links(body_of(db, s)) if link not in slugs]
+
+
+def long_bodies(db):
+    """notes too long for a hook to carry next to others"""
+    rows = db.execute("select slug from notes where type!='rules' and status='active'")
+    return [r[0] for r in rows if len(body_of(db, r[0])) > vault.BODY_MAX]
+
+
 def health(db, project):
     leftovers = list_notes(db, project, ("leftovers",), k=100)
     old = [r for r in leftovers if days_ago(r["created"]) > OLD_LEFTOVER_DAYS]
@@ -456,19 +468,26 @@ def health(db, project):
     conflicts = [p.as_posix() for p in vault.vault_path().glob("*/*-conflict.md")]
     lessons = lessons_week(db)
     dupes = dupe_pairs(db)
+    dead = dead_links(db)
+    long = long_bodies(db)
     days = last_pass()
     errors = errors_since_pass()
     unpushed = git.unpushed()
-    line = (
-        f"{len(leftovers)} open leftovers ({len(old)} older than {OLD_LEFTOVER_DAYS}d), {len(dupes)} dupe pairs, "
-        f"{len(stale)} stale candidates, {len(conflicts)} conflicts, {errors} hook errors, {unpushed} unpushed commits, "
+    problems = [
+        (len(old), f"leftovers older than {OLD_LEFTOVER_DAYS}d"), (len(dupes), "dupe pairs"),
+        (len(stale), "stale candidates"), (len(conflicts), "conflicts"), (errors, "hook errors"),
+        (unpushed, "unpushed commits"), (len(dead), "dead links"), (len(long), f"bodies over {vault.BODY_MAX} characters"),
+    ]
+    line = ", ".join([
+        f"{len(leftovers)} open leftovers",
+        *(f"{n} {what}" for n, what in problems if n),
         f"{lessons['lessons_week']} lessons this week ({lessons['lessons_by_user']} spotted by the user, "
-        f"{lessons['lessons_repeats']} repeats of a rule), last cleanup "
-        + (f"{days}d ago" if days is not None else "never")
-    )
+        f"{lessons['lessons_repeats']} repeats of a rule)",
+        "last cleanup " + (f"{days}d ago" if days is not None else "never"),
+    ])
     return {
         "line": line, "open": len(leftovers), "open_old": len(old), "dupes": len(dupes), "stale": len(stale),
-        "conflicts": len(conflicts), "errors": errors, "unpushed": unpushed, "days_since_pass": days, **lessons,
-        "dupe_pairs": dupes, "stale_slugs": [r["slug"] for r in stale], "old_leftovers": [r["slug"] for r in old],
-        "conflict_files": conflicts,
+        "conflicts": len(conflicts), "errors": errors, "unpushed": unpushed, "dead": len(dead), "long": len(long),
+        "days_since_pass": days, **lessons, "dupe_pairs": dupes, "stale_slugs": [r["slug"] for r in stale],
+        "old_leftovers": [r["slug"] for r in old], "conflict_files": conflicts, "dead_links": dead, "long_bodies": long,
     }

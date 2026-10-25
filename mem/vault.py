@@ -5,6 +5,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 TYPES = ("facts", "rules", "projects", "leftovers")
+BODY_MAX = 3000  # three bodies fit in one hook's room next to the rest
 CONFIG = Path.home() / ".config" / "mem" / "vault"
 MODELS = Path.home() / ".cache" / "mem" / "models"
 
@@ -80,6 +81,17 @@ def section(body, word):
     return ""
 
 
+LINK = re.compile(r"\[\[([^\]|#]+)")
+
+
+def links(body):
+    return LINK.findall(body)
+
+
+def slugs():
+    return {p.stem for p in note_files()}
+
+
 PATH = re.compile(r"(?:(?<![A-Za-z])[A-Za-z]:[\\/]|(?<![\w.~/-])/[a-zA-Z]/)[^\s\"'`|;&<>()]*")
 
 
@@ -101,7 +113,6 @@ class Note:
     updated: str = field(default_factory=today)
     status: str = "active"
     tags: list = field(default_factory=list)
-    source: str = ""
     when: list = field(default_factory=list)
 
     @property
@@ -110,7 +121,7 @@ class Note:
 
     @property
     def links(self):
-        return re.findall(r"\[\[([^\]|#]+)", self.body)
+        return links(self.body)
 
     def text(self):
         return f"{self.title}\n{' '.join(self.tags)}\n{self.body}"
@@ -139,7 +150,6 @@ def read_note(path):
         updated=str(meta.get("updated") or today()),
         status=str(meta.get("status") or "active"),
         tags=[str(t) for t in tags] if isinstance(tags, list) else [str(tags)],
-        source=str(meta.get("source") or ""),
         when=[str(w) for w in meta.get("when") or []],
     )
 
@@ -155,8 +165,6 @@ def write_note(note):
         "status": note.status,
         "tags": note.tags,
     }
-    if note.source:
-        meta["source"] = note.source
     if note.when:
         meta["when"] = note.when
     front = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True, default_flow_style=None)

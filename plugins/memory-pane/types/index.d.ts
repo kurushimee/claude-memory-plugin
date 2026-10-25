@@ -11,6 +11,8 @@ export type Health = {
   conflicts: number
   errors: number
   unpushed: number
+  dead: number
+  long: number
   days_since_pass: number | null
   lessons_week: number
   lessons_by_user: number
