@@ -233,6 +233,7 @@ def check_report():
         "health": health,
         "triggers": trigger_reach(),
         "behind": behind_code(),
+        "dead_labels": dead_labels(),
         "log_tail": log.read_text(encoding="utf-8").splitlines()[-10:] if log.exists() else [],
     }
 
@@ -284,6 +285,14 @@ def names_file(name, path):
     return path == name or path.endswith("/" + name) or name.endswith("/" + path)
 
 
+def dead_labels():
+    """recall eval cases labeling a note that's gone, which the eval then stops testing without a word"""
+    path = vault.vault_path() / "system" / "recall-eval.jsonl"
+    cases = map(json.loads, path.read_text(encoding="utf-8").splitlines()) if path.exists() else []
+    slugs = vault.slugs()
+    return [f"{c['id']} {slug}" for c in cases for slug in c["needed"] + c["related"] if slug not in slugs]
+
+
 def render_check(r):
     h = r["health"]
     out = [
@@ -312,6 +321,8 @@ def render_check(r):
     if r["behind"]:
         out.append("notes naming files a commit changed after the note, check what each says against them")
         out += [f"{b['slug']} {', '.join(b['files'])}" for b in r["behind"]]
+    if r["dead_labels"]:
+        out.append("recall eval labels naming notes that are gone, point each at the note that took over or drop it " + ", ".join(r["dead_labels"]))
     if r["log_tail"]:
         out.append("log tail\n" + "\n".join(r["log_tail"]))
     return "\n".join(out)

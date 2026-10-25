@@ -436,6 +436,12 @@ assert cli.behind_code() == [{"slug": old_take.slug, "files": ["src/thing.py"]}]
 for note in (old_take, new_take):
     cli.forget_note(note.slug)
 
+labels = vault.vault_path() / "system" / "recall-eval.jsonl"
+labels.parent.mkdir(exist_ok=True)
+labels.write_text(json.dumps({"id": "p1", "kind": "prompt", "needed": [moved.slug], "related": ["gone-note"]}) + "\n", encoding="utf-8")
+assert cli.dead_labels() == ["p1 gone-note"], cli.dead_labels()
+labels.unlink()
+
 # a full rulebook, a long leftover list and many long notes still fit under the cap the app cuts at
 for i in range(rules.CAP["global"] - 1):
     vault.write_note(vault.Note(slug=f"global-rule-{i}", type="rules", title=f"global rule {i} " + "word " * 24, body="why x\n\ncheck y\n\nincidents\n- 2026-10-25 self in x, y"))
