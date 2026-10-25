@@ -89,7 +89,7 @@ function problems(h: Health) {
 function cleanupLine(h: Health) {
   const pass = h.days_since_pass === null ? 'no cleanup yet' : `last cleanup ${h.days_since_pass}d ago`
 
-  return `${count(h.feedback_week, 'correction')} this week, ${pass}`
+  return `${count(h.lessons_week, 'lesson')} this week, ${h.lessons_by_user} spotted by the user, ${count(h.lessons_repeats, 'repeat')}, ${pass}`
 }
 
 function projectName(project: string) {

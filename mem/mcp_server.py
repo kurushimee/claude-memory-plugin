@@ -20,7 +20,7 @@ mcp = MCPServer(
 
 @mcp.tool()
 def memory_brief(project: str | None = None) -> str:
-    """the brief for a project, feedback on how to work, open leftovers, project notes and health. with no project it lists the known projects and the global brief"""
+    """the brief for a project, the rules on how to work, open leftovers, project notes and health. with no project it lists the known projects and the global brief"""
     db = index.connect(vec=True)
     index.index(db)
     if project is None:
@@ -33,7 +33,7 @@ def memory_brief(project: str | None = None) -> str:
 
 @mcp.tool()
 def memory_search(query: str, project: str | None = None, type: str | None = None, k: int = 8) -> str:
-    """hybrid search over the vault by words and by meaning. hits come with their body, a maybe list follows with titles worth opening. type is one of facts, feedback, projects, leftovers"""
+    """hybrid search over the vault by words and by meaning. hits come with their body, a maybe list follows with titles worth opening. type is one of facts, rules, projects, leftovers"""
     db = index.connect(vec=True)
     index.index(db)
     hits, maybe = index.search(db, query, project=project, type=type, k=k)
@@ -51,9 +51,28 @@ def memory_show(slug: str) -> str:
 def memory_save(
     type: str, title: str, body: str, tags: list[str] | None = None, links: list[str] | None = None, project: str | None = None
 ) -> str:
-    """save one memory. type is facts, feedback, projects or leftovers. project is a git root like F:/radiance-cascades or global. an existing slug gets its body replaced"""
+    """save one memory. type is facts, projects or leftovers, mistakes go through memory_lesson. project is a git root like F:/radiance-cascades or global. an existing slug gets its body replaced"""
     note = cli.save_note(type, title, body, tags or [], links or [], project or "global")
     return f"saved {note.slug} at {note.path.as_posix()}"
+
+
+@mcp.tool()
+def memory_lesson(
+    what: str,
+    by: str,
+    project: str = "global",
+    rule: str | None = None,
+    new: str | None = None,
+    sharpen: str | None = None,
+    why: str | None = None,
+    check: str | None = None,
+    when: list[str] | None = None,
+    scope: str = "global",
+) -> str:
+    """log a mistake. by is self when you spotted it, user when the user had to. call it first with only what, by and project (where it happened) to see the closest rules, then again with rule set to the slug it is another incident of, adding sharpen, check or when if the rule missed this case, or with new set to the title of a new general rule plus why, check, when (Tool:regex triggers) and scope (global or the project it holds in)"""
+    from . import rules
+
+    return rules.lesson(what, by, project, rule, new, sharpen, why, check, when or [], scope)
 
 
 @mcp.tool()

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
-TYPES = ("facts", "feedback", "projects", "leftovers")
+TYPES = ("facts", "rules", "projects", "leftovers")
 CONFIG = Path.home() / ".config" / "mem" / "vault"
 MODELS = Path.home() / ".cache" / "mem" / "models"
 
@@ -39,8 +39,8 @@ def today():
 
 
 def slugify(title):
-    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
-    return slug[:80] or "note"
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower())[:80].strip("-")
+    return slug or "note"
 
 
 def project_of(cwd):
@@ -61,6 +61,22 @@ def in_scope(note_project, project):
     if note_project == "global":
         return True
     return (project.lower().rstrip("/") + "/").startswith(note_project.lower().rstrip("/") + "/")
+
+
+INCIDENT = re.compile(r"^- (\d{4}-\d{2}-\d{2}) (self|user)\b", re.M)
+
+
+def incidents(body):
+    """(date, who spotted it) for each incident line of a rule"""
+    return INCIDENT.findall(body)
+
+
+def section(body, word):
+    """the paragraph of a note body that starts with word, like the why or the check of a rule"""
+    for para in body.split("\n\n"):
+        if para.startswith(word + " "):
+            return para[len(word) + 1 :].strip()
+    return ""
 
 
 PATH = re.compile(r"(?:(?<![A-Za-z])[A-Za-z]:[\\/]|(?<![\w.~/-])/[a-zA-Z]/)[^\s\"'`|;&<>()]*")
@@ -85,6 +101,7 @@ class Note:
     status: str = "active"
     tags: list = field(default_factory=list)
     source: str = ""
+    when: list = field(default_factory=list)
 
     @property
     def path(self):
@@ -122,6 +139,7 @@ def read_note(path):
         status=str(meta.get("status") or "active"),
         tags=[str(t) for t in tags] if isinstance(tags, list) else [str(tags)],
         source=str(meta.get("source") or ""),
+        when=[str(w) for w in meta.get("when") or []],
     )
 
 
@@ -138,6 +156,8 @@ def write_note(note):
     }
     if note.source:
         meta["source"] = note.source
+    if note.when:
+        meta["when"] = note.when
     front = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True, default_flow_style=None)
     note.path.parent.mkdir(parents=True, exist_ok=True)
     note.path.write_text(f"---\n{front}---\n{note.body.strip()}\n", encoding="utf-8", newline="\n")

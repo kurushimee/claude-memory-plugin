@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 import sqlite3
 import time
@@ -124,6 +125,8 @@ def index(db):
     db.commit()
     if changed or gone or not (vault.mem_dir() / "scopes").exists():
         write_scopes(db)
+    if any(n.type == "rules" for n in changed) or gone or not (vault.mem_dir() / "triggers.json").exists():
+        write_triggers(db)
     if changed:
         embed_notes(db, changed)
     return changed, gone
@@ -133,6 +136,18 @@ def write_scopes(db):
     """the folders that have notes, read by mem-gate"""
     rows = db.execute("select distinct project from notes where status='active' and project!='global' order by project")
     (vault.mem_dir() / "scopes").write_text("".join(r[0] + "\n" for r in rows), encoding="utf-8", newline="\n")
+
+
+def write_triggers(db):
+    """each rule's tool call triggers with its title and what to check, read by mem-gate"""
+    out = []
+    for r in db.execute("select path, slug, project, title from notes where type='rules' and status='active'"):
+        note = vault.read_note(r["path"])
+        check = vault.section(note.body, "check")
+        for when in note.when:
+            tool, _, pattern = when.partition(":")
+            out.append({"slug": r["slug"], "project": r["project"], "tool": tool, "pattern": pattern, "title": r["title"], "check": check})
+    (vault.mem_dir() / "triggers.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
 
 
 def upsert(db, note, digest, mtime):
@@ -333,9 +348,9 @@ def record_reached(session, agent, projects):
 
 
 def prune_reached():
-    """drops the files of sessions idle for a week"""
+    """drops the reached and turn files of sessions idle for a week"""
     cutoff = time.time() - 7 * 86400
-    for path in (vault.mem_dir() / "reached").glob("*"):
+    for path in [*(vault.mem_dir() / "reached").glob("*"), *(vault.mem_dir() / "turns").glob("*")]:
         if path.stat().st_mtime < cutoff:
             path.unlink(missing_ok=True)
 
@@ -405,6 +420,20 @@ def errors_since_pass():
     return sum(1 for line in entries if days_ago(line[:10]) <= since)
 
 
+def lessons_week(db):
+    """the incidents logged in the last week, how many the user had to point out, and how many hit a rule that
+    already had one, the two numbers that should fall to zero"""
+    week = []
+    for r in db.execute("select slug from notes where type='rules' and status='active'"):
+        found = vault.incidents(body_of(db, r[0]))
+        week += [(who, i > 0) for i, (day, who) in enumerate(found) if days_ago(day) <= 7]
+    return {
+        "lessons_week": len(week),
+        "lessons_by_user": sum(1 for who, _ in week if who == "user"),
+        "lessons_repeats": sum(1 for _, repeat in week if repeat),
+    }
+
+
 def health(db, project):
     leftovers = list_notes(db, project, ("leftovers",), k=100)
     old = [r for r in leftovers if days_ago(r["created"]) > OLD_LEFTOVER_DAYS]
@@ -413,7 +442,7 @@ def health(db, project):
         if days_ago(r["updated"]) > STALE_DAYS
     ]
     conflicts = [p.as_posix() for p in vault.vault_path().glob("*/*-conflict.md")]
-    feedback_week = sum(1 for r in list_notes(db, None, ("feedback",), k=100) if days_ago(r["created"]) <= 7)
+    lessons = lessons_week(db)
     dupes = dupe_pairs(db)
     days = last_pass()
     errors = errors_since_pass()
@@ -421,12 +450,13 @@ def health(db, project):
     line = (
         f"{len(leftovers)} open leftovers ({len(old)} older than {OLD_LEFTOVER_DAYS}d), {len(dupes)} dupe pairs, "
         f"{len(stale)} stale candidates, {len(conflicts)} conflicts, {errors} hook errors, {unpushed} unpushed commits, "
-        f"{feedback_week} corrections this week, last cleanup "
+        f"{lessons['lessons_week']} lessons this week ({lessons['lessons_by_user']} spotted by the user, "
+        f"{lessons['lessons_repeats']} repeats of a rule), last cleanup "
         + (f"{days}d ago" if days is not None else "never")
     )
     return {
         "line": line, "open": len(leftovers), "open_old": len(old), "dupes": len(dupes), "stale": len(stale),
-        "conflicts": len(conflicts), "errors": errors, "unpushed": unpushed, "days_since_pass": days, "feedback_week": feedback_week,
+        "conflicts": len(conflicts), "errors": errors, "unpushed": unpushed, "days_since_pass": days, **lessons,
         "dupe_pairs": dupes, "stale_slugs": [r["slug"] for r in stale], "old_leftovers": [r["slug"] for r in old],
         "conflict_files": conflicts,
     }

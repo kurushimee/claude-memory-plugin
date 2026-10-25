@@ -1,5 +1,6 @@
-// mem-gate answers the memory plugin's tool call hook in a few milliseconds. It hands the call to
-// `mem recall` only when a path in it leads into a folder that has notes the session has not reached yet.
+// mem-gate answers the memory plugin's tool call hooks in a few milliseconds. On its own it hands the call to
+// `mem recall` only when a path in it leads into a folder that has notes the session has not reached yet, and as
+// `mem-gate cues` it puts the cues of cues.go next to the call's result.
 package main
 
 import (
@@ -23,11 +24,14 @@ var (
 )
 
 type payload struct {
-	SessionID string         `json:"session_id"`
-	AgentID   string         `json:"agent_id"`
-	Cwd       string         `json:"cwd"`
-	ToolName  string         `json:"tool_name"`
-	ToolInput map[string]any `json:"tool_input"`
+	HookEventName  string         `json:"hook_event_name"`
+	SessionID      string         `json:"session_id"`
+	AgentID        string         `json:"agent_id"`
+	Cwd            string         `json:"cwd"`
+	TranscriptPath string         `json:"transcript_path"`
+	ToolName       string         `json:"tool_name"`
+	ToolInput      map[string]any `json:"tool_input"`
+	IsInterrupt    bool           `json:"is_interrupt"`
 }
 
 func main() {
@@ -37,7 +41,14 @@ func main() {
 	}
 
 	var p payload
-	if json.Unmarshal(raw, &p) != nil || !mayBringNotes(p) {
+	if json.Unmarshal(raw, &p) != nil {
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "cues" {
+		cues(p)
+		return
+	}
+	if !mayBringNotes(p) {
 		return
 	}
 

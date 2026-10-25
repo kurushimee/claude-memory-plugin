@@ -2,7 +2,13 @@
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "mem", "args": ["brief"], "timeout": 30 }] }],
     "SubagentStart": [{ "hooks": [{ "type": "command", "command": "mem", "args": ["brief"], "timeout": 30 }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "mem", "args": ["journal"], "async": true }] }],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "mem", "args": ["recall"], "timeout": 40 }] }],
-    "PostToolUse": [{ "matcher": "Read|Edit|Write|Grep|Glob|Bash", "hooks": [{ "type": "command", "command": "mem-gate", "async": true }] }]
+    "PostToolUse": [
+      { "hooks": [{ "type": "command", "command": "mem-gate", "args": ["cues"], "timeout": 5 }] },
+      { "matcher": "Agent", "hooks": [{ "type": "command", "command": "mem", "args": ["journal"], "timeout": 10 }] },
+      { "matcher": "Read|Edit|Write|Grep|Glob|Bash|PowerShell", "hooks": [{ "type": "command", "command": "mem-gate", "async": true }] }
+    ],
+    "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "mem-gate", "args": ["cues"], "timeout": 5 }] }]
   }
 }

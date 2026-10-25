@@ -5,7 +5,8 @@ import traceback
 
 from . import git, index, vault
 
-HOOKS = ("brief", "recall")
+HOOKS = ("brief", "recall", "journal")
+SAVED = tuple(t for t in vault.TYPES if t != "rules")
 
 
 def main():
@@ -41,12 +42,22 @@ def parse(argv):
     s.add_argument("--json", action="store_true")
     sub.add_parser("show", help="print a note").add_argument("slug")
     s = sub.add_parser("save", help="write a note, body from stdin or --body")
-    s.add_argument("--type", required=True, choices=vault.TYPES)
+    s.add_argument("--type", required=True, choices=SAVED)
     s.add_argument("--title", required=True)
     s.add_argument("--tags", nargs="*", default=[])
     s.add_argument("--links", nargs="*", default=[])
     s.add_argument("--project")
     s.add_argument("--body")
+    s = sub.add_parser("lesson", help="log a mistake, first alone to see the closest rules, then with --rule or --new")
+    s.add_argument("what", help="what went wrong, in one line")
+    s.add_argument("--by", required=True, choices=("self", "user"), help="who spotted it")
+    s.add_argument("--rule", help="slug of the rule this is another incident of")
+    s.add_argument("--new", metavar="TITLE", help="a new rule, the general behavior, with --why and --check")
+    s.add_argument("--sharpen", metavar="TITLE", help="a sharper title for the --rule")
+    s.add_argument("--why")
+    s.add_argument("--check", help="what to run or look at that catches it")
+    s.add_argument("--when", nargs="*", default=[], help="Tool:regex triggers for mem-gate, like Bash|PowerShell:godot")
+    s.add_argument("--scope", default="global", help="the project a new rule holds in, global by default")
     sub.add_parser("done", help="mark a leftover done").add_argument("slug")
     sub.add_parser("forget", help="delete a note").add_argument("slug")
     sub.add_parser("sync", help="pull then push the vault")
@@ -104,6 +115,11 @@ def run(args):
             project = args.project or vault.project_of(os.getcwd())
             note = save_note(args.type, args.title, body, args.tags, args.links, project)
             print(f"saved {note.slug} at {note.path.as_posix()}")
+        case "lesson":
+            from . import rules
+
+            place = vault.project_of(os.getcwd())
+            print(rules.lesson(args.what, args.by, place, args.rule, args.new, args.sharpen, args.why, args.check, args.when, args.scope))
         case "done":
             set_done(args.slug)
             print(f"done {args.slug}")
@@ -129,8 +145,8 @@ def run(args):
 
 
 def save_note(type, title, body, tags, links, project):
-    if type not in vault.TYPES:
-        raise SystemExit(f"type must be one of {', '.join(vault.TYPES)}")
+    if type not in SAVED:
+        raise SystemExit(f"type must be one of {', '.join(SAVED)}, rules change through mem lesson")
     slug = vault.slugify(title)
     if links:
         body = body.rstrip() + "\n\nrelated " + " ".join(f"[[{l}]]" for l in links)

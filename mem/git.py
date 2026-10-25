@@ -50,9 +50,10 @@ def keep_both():
 
 
 def edited():
-    """note files changed but not committed, read from git since any index call may have already seen them"""
-    lines = git("status", "--porcelain", "--", *vault.TYPES).stdout.splitlines()
-    return [vault.vault_path() / l[3:] for l in lines if l.endswith(".md")]
+    """note and journal files changed but not committed, read from git since any index call may have already seen
+    them and the journal hooks only append"""
+    lines = git("status", "--porcelain", "-uall", "--", *vault.TYPES, "journal").stdout.splitlines()
+    return [vault.vault_path() / l[3:] for l in lines if l.endswith((".md", ".jsonl"))]
 
 
 def commit(paths, message):

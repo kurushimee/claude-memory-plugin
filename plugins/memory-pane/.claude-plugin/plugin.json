@@ -1,6 +1,6 @@
 {
   "name": "memory-pane",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "a memory pane beside the chat, what mem injected this session, open leftovers, health and search",
   "types": "./types/index.d.ts"
 }

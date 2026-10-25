@@ -12,7 +12,9 @@ export type Health = {
   errors: number
   unpushed: number
   days_since_pass: number | null
-  feedback_week: number
+  lessons_week: number
+  lessons_by_user: number
+  lessons_repeats: number
 }
 
 export type PaneData = {
