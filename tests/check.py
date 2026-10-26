@@ -535,10 +535,11 @@ if judge.MODEL.exists():
 
     ranked = []
     real_ranker, judge.ranker = judge.ranker, cut_ranker
+    real_gpu, judge.gpu_now = judge.gpu_now, lambda: (judge.NEED, 0)
     assert judge.scores("q", ["d"] * (judge.CHUNK + 1)) == [0.5] * judge.CHUNK, "a judge cut by the deadline dropped what it had scored"
     ranked = [[]]
     assert judge.scores("q", ["d"]) == [] and re.search(r"no other judge.*MiB VRAM free and the GPU \d+% busy", (vault.mem_dir() / "mem.log").read_text(encoding="utf-8"))
-    real_gpu, judge.gpu_now = judge.gpu_now, lambda: (judge.NEED - 1, 0)
+    judge.gpu_now = lambda: (judge.NEED - 1, 0)
     ranked = []
     try:
         judge.scores("q", ["d"])
@@ -550,8 +551,11 @@ if judge.MODEL.exists():
     judge.ranker = real_ranker
     assert judge.gpu_now()[0] > 0
     docs = [hooks.doc_of(db, index.note_row(db, s)) for s in (godot.slug, away.slug)]
-    real = judge.scores(hooks.query_of("godot keeps hanging when a test run never exits", ""), docs)
-    assert real and real[0] >= judge.BODY_GATE > judge.TITLE_GATE > real[1], real
+    try:
+        real = judge.scores(hooks.query_of("godot keeps hanging when a test run never exits", ""), docs)
+        assert real and real[0] >= judge.BODY_GATE > judge.TITLE_GATE > real[1], real
+    except judge.Taken:
+        print("the real judge check didn't run, another program holds the VRAM")
 
 import anyio  # noqa: E402
 from mcp import Client  # noqa: E402

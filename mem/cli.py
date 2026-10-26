@@ -50,7 +50,7 @@ def parse(argv):
     s.add_argument("--title", required=True)
     s.add_argument("--tags", nargs="*", default=[])
     s.add_argument("--links", nargs="*", default=[])
-    s.add_argument("--project", default="global", help="a git root only when the note means nothing outside that project")
+    s.add_argument("--project", default="global", help="a git root for that project's code, design, findings, tools and run recipes")
     s.add_argument("--when", nargs="*", default=[], help="Tool:regex triggers for the calls where the note matters")
     s.add_argument("--body")
     s = sub.add_parser("lesson", help="log a mistake, first alone to see the closest rules, then with --rule or --new")

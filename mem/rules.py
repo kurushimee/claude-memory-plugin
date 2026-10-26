@@ -237,7 +237,7 @@ def closest(db, what, by, place):
         'case add --sharpen "<title>", --check "<a sentence the check gains>" or --when "Tool:regex". one from '
         "another project moves to global",
         "if none does, write the general behavior behind it, not this one case, with --new \"<title>\" --why \"...\" "
-        '--check "..." --when "Tool:regex", plus --scope <project> only when it is about that project\'s own code or '
-        "design",
+        '--check "..." --when "Tool:regex", plus --scope <project> when it only bites in that project\'s setup, its '
+        "code, design, tools or look",
     ]
     return "\n".join(out)
