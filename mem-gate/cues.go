@@ -76,9 +76,9 @@ func cues(p payload) {
 	text := toolText(p.ToolName, p.ToolInput)
 	places := placesOf(p.Cwd, text)
 	if path := editedFile(p); path != "" && inScope(vault, normalized(path)) {
-		// a note's file name is its title, free text that would fit any trigger, so only the kind of file counts,
-		// and the edit happens in the vault whatever folder the session works in
-		text = p.ToolName + " " + filepath.Ext(path)
+		// a note's file name is its title, free text that would fit any trigger, so only its folder and the kind of
+		// file count, and the edit happens in the vault whatever folder the session works in
+		text = p.ToolName + " " + filepath.Join(filepath.Dir(path), "*"+filepath.Ext(path))
 		places = []string{projectOf(vault)}
 	}
 	logCall(vault, p.ToolName, text, places)

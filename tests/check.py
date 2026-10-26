@@ -339,6 +339,12 @@ vault.write_note(vault.Note(slug="godot-edits-get-a-run", type="rules", title="g
 index.index(db)
 note_edit = {**call, "session_id": "c5", "tool_name": "Edit", "tool_input": {"file_path": godot.path.as_posix()}}
 assert cue(note_edit) == "", "a vault note's file name fit a trigger"
+vault.write_note(vault.Note(slug="facts-edits-say-it-generally", type="rules", title="facts edits say it generally", body="why x\n\ncheck y\n\nincidents\n- 2026-10-26 user in x, y", when=[r"Edit:[\\/]facts[\\/]\*\.md$"]))
+index.index(db)
+folder_cue = cue({**note_edit, "session_id": "c10"})
+assert "facts edits say it generally" in folder_cue and "godot edits" not in folder_cue, "a vault folder trigger missed a note edit"
+(vault_dir / "rules" / "facts-edits-say-it-generally.md").unlink()
+index.index(db)
 vault.write_note(long_note)
 over = cue({**note_edit, "session_id": "c7", "tool_input": {"file_path": long_note.path.as_posix()}})
 assert f"body at {vault.BODY_MAX + 1} characters" in over, "an edit that left a note over the cap got no cue"
