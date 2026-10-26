@@ -61,7 +61,7 @@ A leftover is an open thread, unfinished work, something to come back to. Write 
 
 ## Writing a note
 
-One subject per note, in the voice above, with a body under 3,000 characters so three fit in one hook's room, which `mem save` enforces. Every word of a note gets read whenever it comes up, so it holds only what a later task needs and can't get faster another way.
+One subject per note, in the voice above, with a body under 3,000 characters so three fit in one hook's room, which `mem save` enforces and a cue flags after a direct edit. Every word of a note gets read whenever it comes up, so it holds only what a later task needs and can't get faster another way.
 
 - The title is the claim itself, so the note can be judged without opening it.
 - Write what holds now and why, never how it got there. No history, no commit or session narration, no "as of", "uncommitted" or "now", no numbers that a newer measurement replaced. When the state changes, rewrite the note to the new state.

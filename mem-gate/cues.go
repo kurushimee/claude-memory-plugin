@@ -11,18 +11,26 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
 	editsEvery     = 5
 	transcriptTail = 64 << 10
 	callsMax       = 1 << 20
+	bodyMax        = 3000 // vault.BODY_MAX
 	failedCue      = "this call failed. if the cause was your own slip and not the environment, fix it, then log the general behavior behind it with mem lesson --by self"
 	repeatCue      = "this exact call already failed earlier this turn. stop retrying and find the cause first"
 	heardCue       = "the user sent a message while you worked. if it points out something you did wrong, first log it with mem lesson --by user as the general behavior behind it, then go on"
+	overCapCue     = "this edit left the note's body at %d characters, a note stays under %d so a hook can carry it next to others. keep only what a later task needs, or split it by subject"
 )
 
-var editTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit"}
+var (
+	editTools = []string{"Edit", "Write", "MultiEdit", "NotebookEdit"}
+	// a rule has no cap, so only these folders count
+	cappedTypes = []string{"facts", "projects", "leftovers"}
+	frontMatter = regexp.MustCompile(`(?s)\A---\n.*?\n---\n?`)
+)
 
 type trigger struct {
 	Slug    string `json:"slug"`
@@ -81,6 +89,9 @@ func cues(p payload) {
 	if path := editedFile(p); path != "" && p.HookEventName == "PostToolUse" {
 		if n := t.edit(path); n%editsEvery == 0 {
 			out = append(out, fmt.Sprintf("that's edit number %d of %s this turn. step back and check the approach works before editing it again", n, path))
+		}
+		if n := overCap(vault, path); n > 0 {
+			out = append(out, fmt.Sprintf(overCapCue, n, bodyMax))
 		}
 	}
 	if m := t.overtime(); m > 0 {
@@ -291,6 +302,26 @@ func (t *turn) rules(vault, tool, text string, places []string) []string {
 func matches(pattern, text string) bool {
 	re, err := regexp.Compile("(?i)" + pattern)
 	return err == nil && re.MatchString(text)
+}
+
+// overCap is the length of a note's body when an edit left it over the cap, else 0. mem save refuses a long body,
+// but the edit tools write the vault directly, so this is where the cap gets seen.
+func overCap(vault, path string) int {
+	path = normalized(path)
+	folder := filepath.ToSlash(filepath.Dir(path))
+	if filepath.Ext(path) != ".md" || !slices.ContainsFunc(cappedTypes, func(t string) bool { return slashed(folder) == slashed(vault+"/"+t) }) {
+		return 0
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	body := frontMatter.ReplaceAllString(strings.ReplaceAll(string(raw), "\r\n", "\n"), "")
+	if n := utf8.RuneCountInString(strings.TrimSpace(body)); n > bodyMax {
+		return n
+	}
+	return 0
 }
 
 func editedFile(p payload) string {

@@ -308,6 +308,10 @@ vault.write_note(vault.Note(slug="godot-edits-get-a-run", type="rules", title="g
 index.index(db)
 note_edit = {**call, "session_id": "c5", "tool_name": "Edit", "tool_input": {"file_path": godot.path.as_posix()}}
 assert cue(note_edit) == "", "a vault note's file name fit a trigger"
+vault.write_note(long_note)
+over = cue({**note_edit, "session_id": "c7", "tool_input": {"file_path": long_note.path.as_posix()}})
+assert f"body at {vault.BODY_MAX + 1} characters" in over, "an edit that left a note over the cap got no cue"
+long_note.path.unlink()
 assert "godot edits get a test run" in cue({**note_edit, "session_id": "c6", "tool_input": {"file_path": f"{elsewhere.as_posix()}/godot_runner.py"}})
 docs_rule = vault.Note(slug="elsewhere-docs-stay-short", type="rules", title="elsewhere docs stay short", body="why x\n\ncheck y\n\nincidents\n- 2026-10-25 user in x, y", project=elsewhere.as_posix(), when=["Edit:\\.md$"])
 vault.write_note(docs_rule)
@@ -500,8 +504,8 @@ if judge.MODEL.exists():
     real_ranker, judge.ranker = judge.ranker, cut_ranker
     assert judge.scores("q", ["d"] * (judge.CHUNK + 1)) == [0.5] * judge.CHUNK, "a judge cut by the deadline dropped what it had scored"
     ranked = [[]]
-    assert judge.scores("q", ["d"]) == [] and "on a free GPU" in (vault.mem_dir() / "mem.log").read_text(encoding="utf-8")
-    real_free, judge.free_vram = judge.free_vram, lambda: judge.NEED - 1
+    assert judge.scores("q", ["d"]) == [] and re.search(r"no other judge.*MiB VRAM free and the GPU \d+% busy", (vault.mem_dir() / "mem.log").read_text(encoding="utf-8"))
+    real_gpu, judge.gpu_now = judge.gpu_now, lambda: (judge.NEED - 1, 0)
     ranked = []
     try:
         judge.scores("q", ["d"])
@@ -509,9 +513,9 @@ if judge.MODEL.exists():
     except judge.Taken:
         pass
     assert not ranked, "the judge loaded with too little VRAM free"
-    judge.free_vram = real_free
+    judge.gpu_now = real_gpu
     judge.ranker = real_ranker
-    assert judge.free_vram() > 0
+    assert judge.gpu_now()[0] > 0
     docs = [hooks.doc_of(db, index.note_row(db, s)) for s in (godot.slug, away.slug)]
     real = judge.scores(hooks.query_of("godot keeps hanging when a test run never exits", ""), docs)
     assert real and real[0] >= judge.BODY_GATE > judge.TITLE_GATE > real[1], real
