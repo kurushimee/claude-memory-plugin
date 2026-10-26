@@ -1,8 +1,10 @@
+import functools
 import json
 import os
 from pathlib import Path
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from . import cli, hooks, index, vault
 
@@ -18,7 +20,21 @@ mcp = MCPServer(
 )
 
 
-@mcp.tool()
+def tool(fn):
+    """a refusal reaches the model with its text, which says what to do instead, where any other exception reaches it
+    as a bare error"""
+
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except vault.Refused as e:
+            raise ToolError(str(e)) from None
+
+    return mcp.tool()(run)
+
+
+@tool
 def memory_brief(project: str | None = None) -> str:
     """the brief for a project, the rules on how to work, open leftovers, project notes and health. with no project it lists the known projects and the global brief"""
     db = index.connect(vec=True)
@@ -31,7 +47,7 @@ def memory_brief(project: str | None = None) -> str:
     return text
 
 
-@mcp.tool()
+@tool
 def memory_search(query: str, project: str | None = None, type: str | None = None, k: int = 8) -> str:
     """hybrid search over the vault by words and by meaning. hits come with their body, a maybe list follows with titles worth opening. type is one of facts, rules, projects, leftovers"""
     db = index.connect(vec=True)
@@ -40,14 +56,14 @@ def memory_search(query: str, project: str | None = None, type: str | None = Non
     return cli.render_search(db, hits, maybe)
 
 
-@mcp.tool()
+@tool
 def memory_show(slug: str) -> str:
     """the full note for a slug"""
     note = vault.find(slug)
     return note.path.read_text(encoding="utf-8")
 
 
-@mcp.tool()
+@tool
 def memory_save(
     type: str, title: str, body: str, tags: list[str] | None = None, links: list[str] | None = None, project: str | None = None
 ) -> str:
@@ -56,7 +72,7 @@ def memory_save(
     return f"saved {note.slug} at {note.path.as_posix()}"
 
 
-@mcp.tool()
+@tool
 def memory_lesson(
     what: str,
     by: str,
@@ -75,21 +91,21 @@ def memory_lesson(
     return rules.lesson(what, by, project, rule, new, sharpen, why, check, when or [], scope)
 
 
-@mcp.tool()
+@tool
 def memory_done(slug: str) -> str:
     """mark a leftover done"""
     cli.set_done(slug)
     return f"done {slug}"
 
 
-@mcp.tool()
+@tool
 def memory_forget(slug: str) -> str:
     """delete a note for good"""
     cli.forget_note(slug)
     return f"forgot {slug}"
 
 
-@mcp.tool()
+@tool
 def memory_check() -> str:
     """full health report of the vault and the setup"""
     return cli.render_check(cli.check_report())

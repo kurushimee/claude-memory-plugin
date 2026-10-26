@@ -21,8 +21,8 @@ def main():
     args = parse(sys.argv[1:])
     try:
         run(args)
-    except SystemExit:
-        raise
+    except vault.Refused as e:
+        raise SystemExit(str(e))
     except Exception as e:
         try:
             vault.log(f"{args.cmd} failed: {traceback.format_exc()}")
@@ -152,14 +152,14 @@ def run(args):
 
 def save_note(type, title, body, tags, links, project):
     if type not in SAVED:
-        raise SystemExit(f"type must be one of {', '.join(SAVED)}, rules change through mem lesson")
+        raise vault.Refused(f"type must be one of {', '.join(SAVED)}, rules change through mem lesson")
     slug = vault.slugify(title)
     if links:
         body = body.rstrip() + "\n\nrelated " + " ".join(f"[[{l}]]" for l in links)
     if missing := [l for l in vault.links(body) if l not in vault.slugs()]:
-        raise SystemExit(f"no note {', '.join(missing)}, link only to notes that exist")
+        raise vault.Refused(f"no note {', '.join(missing)}, link only to notes that exist")
     if len(body) > vault.BODY_MAX:
-        raise SystemExit(
+        raise vault.Refused(
             f"the body has {len(body)} characters, a note stays under {vault.BODY_MAX} so a hook can carry it next to "
             "others. keep only what a later task needs, or split it by subject"
         )

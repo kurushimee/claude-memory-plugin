@@ -10,12 +10,17 @@ CONFIG = Path.home() / ".config" / "mem" / "vault"
 MODELS = Path.home() / ".cache" / "mem" / "models"
 
 
+class Refused(Exception):
+    """mem won't do what was asked, and the message says what to do instead. A SystemExit in its place takes the mcp
+    server down without an answer"""
+
+
 def vault_path():
     override = os.environ.get("MEM_VAULT")
     if override:
         return Path(override)
     if not CONFIG.exists():
-        raise SystemExit("no vault set, run: mem init <vault path>")
+        raise Refused("no vault set, run: mem init <vault path>")
     return Path(CONFIG.read_text(encoding="utf-8").strip())
 
 
@@ -184,4 +189,4 @@ def find(slug):
         p = vault_path() / t / f"{slug}.md"
         if p.exists():
             return read_note(p)
-    raise SystemExit(f"no note with slug {slug}")
+    raise Refused(f"no note with slug {slug}")

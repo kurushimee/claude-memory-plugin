@@ -83,14 +83,14 @@ assert vault.read_note(godot.path).links == ["one-gpu-job-at-a-time"]
 try:
     cli.save_note("rules", "a rule saved by hand", "body", [], [], "global")
     raise AssertionError("a rule got saved around mem lesson")
-except SystemExit:
+except vault.Refused:
     pass
 refused = (("see [[no-such-note]]", [], "a dead link"), ("x", ["no-such-note"], "a dead link passed as links"), ("a" * (vault.BODY_MAX + 1), [], "a body over the cap"))
 for body, links, why in refused:
     try:
         cli.save_note("facts", "a note that should not save", body, [], links, "global")
         raise AssertionError(f"{why} got saved")
-    except SystemExit:
+    except vault.Refused:
         pass
 assert not (vault_dir / "facts" / "a-note-that-should-not-save.md").exists()
 
@@ -120,7 +120,7 @@ assert closest.startswith("closest rules") and f"[{fb.slug}]" in closest and "gl
 try:
     rules.lesson("sized a two word prompt as a small job", "user", project, rule=fb.slug)
     raise AssertionError("a user lesson got in without making the rule catch the case")
-except SystemExit as e:
+except vault.Refused as e:
     assert "didn't catch this case in time" in str(e), e
 again = rules.lesson("sized a two word prompt as a small job", "user", project, rule=fb.slug, check="count what the prompt asks for")
 assert "2 incidents now" in again, again
@@ -136,7 +136,7 @@ for bad in ("Bash:(?<=x)godot", "godot", "Bash:(unclosed"):
     try:
         rules.lesson("x", "self", project, rule=fb.slug, when=[bad])
         raise AssertionError(f"a trigger mem-gate can't run got in, {bad}")
-    except SystemExit:
+    except vault.Refused:
         pass
 too_long = (
     ({"what": "x" * (rules.WHAT_MAX + 1), "rule": fb.slug}, "a what past its cap"),
@@ -147,7 +147,7 @@ for args, why in too_long:
     try:
         rules.lesson(by="self", place=project, **args)
         raise AssertionError(f"{why} got in")
-    except SystemExit:
+    except vault.Refused:
         pass
 assert len(vault.incidents(vault.read_note(fb.path).body)) == 3, "a refused lesson still logged its incident"
 calls_log = vault_dir / ".mem" / "calls.jsonl"
@@ -457,7 +457,7 @@ index.index(db)
 try:
     rules.lesson("one too many", "self", project, new="a rule past the cap", why="x", check="y")
     raise AssertionError("a rule got in past the cap")
-except SystemExit as e:
+except vault.Refused as e:
     assert "the cap is 20" in str(e), e
 text, shown, listed = hooks.brief_text(index.connect(vec=True), project)
 assert len(text) < 10_000, f"the brief is {len(text)} characters, the app cuts it to a preview"
@@ -516,6 +516,9 @@ if judge.MODEL.exists():
     real = judge.scores(hooks.query_of("godot keeps hanging when a test run never exits", ""), docs)
     assert real and real[0] >= judge.BODY_GATE > judge.TITLE_GATE > real[1], real
 
+import anyio  # noqa: E402
+from mcp import Client  # noqa: E402
+
 from mem import mcp_server  # noqa: E402
 
 settings = tmp / "Claude-Data" / "app" / "Claude Extensions Settings"
@@ -525,6 +528,17 @@ os.environ.update(LOCALAPPDATA=str(tmp), CLAUDE_CODE_ENTRYPOINT="claude-desktop"
 assert mcp_server.extension_covers()
 os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
 assert not mcp_server.extension_covers()
+
+
+async def refused_then_shown():
+    with anyio.fail_after(30):
+        async with Client(mcp_server.mcp) as client:
+            return await client.call_tool("memory_show", {"slug": "no-such-note"}), await client.call_tool("memory_show", {"slug": godot.slug})
+
+
+refused, shown = anyio.run(refused_then_shown)
+assert refused.is_error and "no note with slug no-such-note" in refused.content[0].text, refused
+assert not shown.is_error and godot.title in shown.content[0].text, "a refused call took the server down"
 
 
 def writable(remove, path, _):

@@ -76,10 +76,10 @@ def lesson(what, by, place, rule=None, new=None, sharpen=None, why=None, check=N
     closest"""
     what = " ".join(what.split())
     if len(what) > WHAT_MAX:
-        raise SystemExit(f"say what went wrong in one line under {WHAT_MAX} characters, the check holds the detail")
+        raise vault.Refused(f"say what went wrong in one line under {WHAT_MAX} characters, the check holds the detail")
     when = list(when)
     if error := triggers_error(when):
-        raise SystemExit(error)
+        raise vault.Refused(error)
     db = index.connect(vec=True)
     index.index(db)
     if rule:
@@ -111,9 +111,9 @@ def triggers_error(when):
 def strengthen(db, slug, entry, by, sharpen, check, when):
     path = vault.vault_path() / "rules" / f"{slug}.md"
     if not path.exists():
-        raise SystemExit(f"no rule {slug}, mem lesson without --rule lists the closest ones")
+        raise vault.Refused(f"no rule {slug}, mem lesson without --rule lists the closest ones")
     if by == "user" and not (sharpen or check or when):
-        raise SystemExit(
+        raise vault.Refused(
             "the user had to point this out, so the rule didn't catch this case in time. log it in one call that also "
             "makes the rule catch it, with --sharpen, --check or --when"
         )
@@ -135,17 +135,17 @@ def strengthen(db, slug, entry, by, sharpen, check, when):
 
 def add(db, title, entry, why, check, when, scope):
     if not why or not check:
-        raise SystemExit("a new rule needs --why and --check")
+        raise vault.Refused("a new rule needs --why and --check")
     if len(title) > TITLE_MAX:
-        raise SystemExit(f"the title is the rule and stays under {TITLE_MAX} characters, say it more generally")
+        raise vault.Refused(f"the title is the rule and stays under {TITLE_MAX} characters, say it more generally")
     check_within(check)
     slug = vault.slugify(title)
     if (vault.vault_path() / "rules" / f"{slug}.md").exists():
-        raise SystemExit(f"rule {slug} exists, strengthen it with --rule {slug}")
+        raise vault.Refused(f"rule {slug} exists, strengthen it with --rule {slug}")
     count = sum(1 for r in index.list_notes(db, None, ("rules",), 500) if r["project"] == scope)
     cap = CAP["global" if scope == "global" else "project"]
     if count >= cap:
-        raise SystemExit(
+        raise vault.Refused(
             f"{scope} has {count} rules, the cap is {cap}. fold this lesson into the closest rule with --rule and "
             "--sharpen, or merge two rules first"
         )
@@ -158,7 +158,7 @@ def check_within(check, path=None):
     if len(check) <= CHECK_MAX:
         return check
     where = f"the check in {path.as_posix()}" if path else "it"
-    raise SystemExit(
+    raise vault.Refused(
         f"the check would have {len(check)} characters, past {CHECK_MAX}, and every cue carries all of it. rewrite "
         f"{where} shorter so it still catches every incident, then log the lesson again"
     )
