@@ -65,11 +65,16 @@ def memory_show(slug: str) -> str:
 
 @tool
 def memory_save(
-    type: str, title: str, body: str, tags: list[str] | None = None, links: list[str] | None = None, project: str | None = None
+    type: str,
+    title: str,
+    body: str,
+    tags: list[str] | None = None,
+    links: list[str] | None = None,
+    project: str | None = None,
+    when: list[str] | None = None,
 ) -> str:
-    """save one memory. type is facts, projects or leftovers, mistakes go through memory_lesson. project is a git root like F:/radiance-cascades or global. an existing slug gets its body replaced. the title is the claim itself. the body holds what holds now and why, under 3000 characters, with no history or session narration and nothing the repo's docs, the code or a rule already say"""
-    note = cli.save_note(type, title, body, tags or [], links or [], project or "global")
-    return f"saved {note.slug} at {note.path.as_posix()}"
+    """save one memory. type is facts, projects or leftovers, mistakes go through memory_lesson. take the project's names out of what you learned first, and if it still holds anywhere else, a tool, engine, library, file format, technique, the machine, the user's hardware or how the user wants stuff, write it that way and leave project as global. project is a git root only for what is about that project's own code, files, design, state or decisions, and a finding with both parts gets split into a global note and a project note linking to it. when is Tool:regex triggers for the calls where the note matters, which bring it in at those calls in any project. an existing slug gets its body replaced and keeps its triggers unless new ones are given. the title is the claim itself. the body holds what holds now and why, under 3000 characters, with no history or session narration and nothing the repo's docs, the code or a rule already say"""
+    return cli.saved(cli.save_note(type, title, body, tags or [], links or [], project or "global", when or []))
 
 
 @tool
@@ -85,7 +90,7 @@ def memory_lesson(
     when: list[str] | None = None,
     scope: str = "global",
 ) -> str:
-    """log a mistake. what is one line. by is self when you spotted it, user when the user had to. project is where it happened, a git root like F:/radiance-cascades or global. call it first with only what, by and project to see the closest rules, then again with rule set to the slug it is another incident of, adding sharpen, check (a sentence the rule's check gains) or when if the rule missed this case, which a user lesson always needs, or with new set to the title of a new general rule plus why, check, when (Tool:regex triggers) and scope (global or the project it holds in)"""
+    """log a mistake. what is one line. by is self when you spotted it, user when the user had to. project is the git root where it happened, or global when it happened outside any project. call it first with only what, by and project to see the closest rules from every project, then again with rule set to the slug it is another incident of, adding sharpen, check (a sentence the rule's check gains) or when if the rule missed this case, which a user lesson always needs. a rule from another project moves to global when strengthened from here. or call it with new set to the title of a new general rule plus why, check, when (Tool:regex triggers) and scope, which stays global unless the rule is about one project's own code or design"""
     from . import rules
 
     return rules.lesson(what, by, project, rule, new, sharpen, why, check, when or [], scope)

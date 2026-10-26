@@ -125,7 +125,7 @@ def index(db):
     db.commit()
     if changed or gone or not (vault.mem_dir() / "scopes").exists():
         write_scopes(db)
-    if any(n.type == "rules" for n in changed) or gone or not (vault.mem_dir() / "triggers.json").exists():
+    if changed or gone or not (vault.mem_dir() / "triggers.json").exists():
         write_triggers(db)
     if changed:
         embed_notes(db, changed)
@@ -139,15 +139,20 @@ def write_scopes(db):
 
 
 def write_triggers(db):
-    """each rule's tool call triggers with its title and what to check, read by mem-gate"""
+    """each note's tool call triggers with its type, title and a rule's check, read by mem-gate"""
     out = []
-    for r in db.execute("select path, slug, project, title from notes where type='rules' and status='active'"):
+    for r in db.execute("select path, slug, type, project, title from notes where status='active'"):
         note = vault.read_note(r["path"])
-        check = vault.section(note.body, "check")
+        check = vault.section(note.body, "check") if r["type"] == "rules" else ""
         for when in note.when:
             tool, _, pattern = when.partition(":")
-            out.append({"slug": r["slug"], "project": r["project"], "tool": tool, "pattern": pattern, "title": r["title"], "check": check})
+            out.append({"slug": r["slug"], "type": r["type"], "project": r["project"], "tool": tool, "pattern": pattern, "title": r["title"], "check": check})
     (vault.mem_dir() / "triggers.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+
+
+def triggers():
+    path = vault.mem_dir() / "triggers.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
 def upsert(db, note, digest, mtime):
@@ -331,20 +336,21 @@ def record_injected(db, session, agent, slugs, source):
 
 
 def reached_file(session, agent):
-    """the folders a session already reached, a plain file so mem-gate can read it"""
+    """the folders a session already reached and the notes its calls' subjects already brought, a plain file so
+    mem-gate can read it"""
     return vault.mem_dir() / "reached" / f"{session}+{agent or ''}"
 
 
-def reached_projects(session, agent):
+def reached(session, agent):
     path = reached_file(session, agent)
     return set(path.read_text(encoding="utf-8").splitlines()) if path.exists() else set()
 
 
-def record_reached(session, agent, projects):
+def record_reached(session, agent, names):
     path = reached_file(session, agent)
     path.parent.mkdir(exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as f:
-        f.writelines(p + "\n" for p in projects)
+        f.writelines(n + "\n" for n in names)
 
 
 def prune_reached():

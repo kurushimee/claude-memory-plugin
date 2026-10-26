@@ -116,7 +116,7 @@ listed = index.list_notes(db, project, ("leftovers",))
 assert [r["slug"] for r in listed] == [left.slug]
 
 closest = rules.lesson("left a capture running past its deadline", "self", project)
-assert closest.startswith("closest rules") and f"[{fb.slug}]" in closest and "global has 1 of 20" in closest, closest
+assert closest.startswith("closest rules") and f"[{fb.slug}]" in closest, closest
 try:
     rules.lesson("sized a two word prompt as a small job", "user", project, rule=fb.slug)
     raise AssertionError("a user lesson got in without making the rule catch the case")
@@ -150,6 +150,17 @@ for args, why in too_long:
     except vault.Refused:
         pass
 assert len(vault.incidents(vault.read_note(fb.path).body)) == 3, "a refused lesson still logged its incident"
+far_rule = vault.Note(slug="captures-end-by-their-deadline", type="rules", title="captures end by their deadline", body="why a capture left running holds the gpu\n\ncheck give every capture a deadline\n\nincidents\n- 2026-10-25 self in x, left one running", project=elsewhere.as_posix())
+vault.write_note(far_rule)
+index.index(db)
+assert f"[{far_rule.slug}] in {elsewhere.as_posix()}" in rules.lesson("left a capture running past its deadline", "self", project), "a rule another project has never came up"
+for place in ("global", (elsewhere / "src").as_posix()):
+    assert "moved it to global" not in rules.lesson("left a capture running", "self", place, rule=far_rule.slug), place
+    assert vault.read_note(far_rule.path).project == elsewhere.as_posix(), f"a lesson from {place} moved a project rule"
+assert "moved it to global" in rules.lesson("left a capture running again", "self", project, rule=far_rule.slug)
+assert vault.read_note(far_rule.path).project == "global", "a rule that bit in a second project stayed in its first"
+far_rule.path.unlink()
+index.index(db)
 calls_log = vault_dir / ".mem" / "calls.jsonl"
 logged_calls = [
     {"tool": "Bash", "text": "Bash cmake --build build", "places": [project]},
@@ -266,6 +277,26 @@ assert gate({**gated, "agent_id": "a1"}) == "", "a subagent's call brought notes
 assert away.title in gate(gated), "the gate kept back a folder entry"
 assert gate(gated) == "", "the gate let a reached folder through"
 assert gate({**gated, "tool_input": {"file_path": f"{project}/facts/x.md"}}) == ""
+
+assert cli.parse(["save", "--type", "facts", "--title", "x"]).project == "global", "a save with no project landed in one"
+try:
+    cli.save_note("facts", "a note with a bad trigger", "x", [], [], "global", ["godot"])
+    raise AssertionError("a note trigger mem-gate can't run got in")
+except vault.Refused:
+    pass
+fx = cli.save_note("facts", "reshade fx compiles twice", "reshade's own fxc passes code the sdk fxc refuses, so both compile it", ["reshade"], [], "global", ["Bash|PowerShell:\\.fx\\b"])
+assert vault.read_note(cli.save_note("facts", fx.title, "both fxc builds compile every .fx", ["reshade"], [], "global").path).when == fx.when, "a body rewrite dropped the triggers"
+local = cli.save_note("facts", "the vault builds with make", "make all builds it", [], [], project, ["Bash:make"])
+compiled = {"hook_event_name": "PostToolUse", "session_id": "t1", "cwd": elsewhere.as_posix(), "tool_name": "Bash", "tool_input": {"command": "fxc /T fx_5_0 boost.fx"}}
+got = context(hooks.recall(compiled))
+assert "memory this call is about" in got and "both fxc builds" in got, got
+assert hooks.recall(compiled) is None, "a note a call is about came twice"
+assert hooks.recall({**compiled, "tool_input": {"command": "make all"}}) is None, "a project note came by its trigger outside its project"
+assert "both fxc builds" in gate({**compiled, "session_id": "t2"}), "the gate kept back a note the call is about"
+assert gate({**compiled, "session_id": "t2"}) == "", "the gate handed over a note the session already got"
+assert cue({**compiled, "session_id": "t3"}) == "", "a note's trigger came as a rule cue"
+for note in (fx, local):
+    cli.forget_note(note.slug)
 
 call = {"hook_event_name": "PostToolUse", "session_id": "c1", "agent_id": "", "cwd": project, "tool_name": "Bash", "tool_input": {"command": "godot --headless -s capture.gd"}}
 started = time.perf_counter()
@@ -446,10 +477,10 @@ labels.write_text(json.dumps({"id": "p1", "kind": "prompt", "needed": [moved.slu
 assert cli.dead_labels() == ["p1 gone-note"], cli.dead_labels()
 labels.unlink()
 
-# a full rulebook, a long leftover list and many long notes still fit under the cap the app cuts at
-for i in range(rules.CAP["global"] - 1):
+# a big rulebook, a long leftover list and many long notes still fit under the cap the app cuts at
+for i in range(19):
     vault.write_note(vault.Note(slug=f"global-rule-{i}", type="rules", title=f"global rule {i} " + "word " * 24, body="why x\n\ncheck y\n\nincidents\n- 2026-10-25 self in x, y"))
-for i in range(rules.CAP["project"]):
+for i in range(15):
     vault.write_note(vault.Note(slug=f"project-rule-{i}", type="rules", title=f"project rule {i} " + "word " * 24, body="why x\n\ncheck y\n\nincidents", project=project))
 for i in range(12):
     vault.write_note(vault.Note(slug=f"stress-note-{i}", type="facts", title=f"stress note {i}", body=("lorem " * 160).strip(), project=project))
@@ -458,17 +489,19 @@ for i in range(45):
 for i in range(40):
     vault.write_note(vault.Note(slug=f"stress-global-{i}", type="facts", title=f"stress global {i} " + "word " * 10, body="x"))
 index.index(db)
-try:
-    rules.lesson("one too many", "self", project, new="a rule past the cap", why="x", check="y")
-    raise AssertionError("a rule got in past the cap")
-except vault.Refused as e:
-    assert "the cap is 20" in str(e), e
 text, shown, listed = hooks.brief_text(index.connect(vec=True), project)
 assert len(text) < 10_000, f"the brief is {len(text)} characters, the app cuts it to a preview"
-assert text.count("\n- global rule") + text.count("\n- project rule") == rules.CAP["global"] - 1 + rules.CAP["project"], "a rule line got cut"
+assert text.count("\n- global rule") + text.count("\n- project rule") == 34, "a rule line got cut while it had room"
 assert "health:" in text and text.endswith(hooks.POINTER) and "more, mem search finds them" in text, text[-600:]
 lines = text.splitlines()
 assert shown and all(any(l.startswith("## ") and f"({s})" in l for l in lines) for s in shown), shown
+for i in range(19, 119):
+    vault.write_note(vault.Note(slug=f"global-rule-{i}", type="rules", title=f"global rule {i} " + "word " * 24, body="why x\n\ncheck y\n\nincidents"))
+index.index(db)
+text = hooks.brief_text(index.connect(vec=True), project)[0]
+kept = text.count("\n- global rule") + text.count("\n- project rule")
+assert len(text) < 10_000 and text.endswith(hooks.POINTER), f"a rulebook past the room took the brief to {len(text)} characters"
+assert kept < 134 and hooks.RULES_LEFT.format(134 - kept) in text, "the rules with no room went unnamed"
 for i in range(30):
     vault.write_note(vault.Note(slug=f"far-{i}", type="facts", title=f"far note {i}", body=("dolor " * 200).strip(), project=elsewhere.as_posix()))
 index.index(db)

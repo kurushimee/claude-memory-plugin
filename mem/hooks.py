@@ -24,6 +24,10 @@ TAKEN = (
     "no notes came by meaning with this message, a game or another program holds the gpu memory the judge needs, so "
     "search memory yourself if this message needs notes"
 )
+RULES_LEFT = (
+    "and {} more rules with no room here. they still come back at the calls their triggers fit, and a cleanup pass "
+    "merges rules until all fit"
+)
 ASKED = (
     "asked before in this project. if this is the same question, stop this agent with TaskStop and use what came "
     "back, or say what's different this time"
@@ -109,10 +113,17 @@ GROUPS = (
 
 
 def rule_lines(db, rows, room):
-    """every rule in scope, one line each and never cut, since the caps on the rulebook keep them few and short"""
+    """the rules in scope one line each while they fit, the ones that bit most first, then how many had no room"""
     if not rows:
         return []
-    return [room.take(rules.HEADER), *(room.take(rules.line(db, r)) for r in rules.ranked(db, rows))]
+    out = [room.take(rules.HEADER)]
+    ranked = rules.ranked(db, rows)
+    for i, r in enumerate(ranked):
+        if not room.fits(text := rules.line(db, r)):
+            out.append(room.take(RULES_LEFT.format(len(ranked) - i)))
+            break
+        out.append(text)
+    return out
 
 
 def sections(db, rows, room):
@@ -220,7 +231,7 @@ def entered(db, project, places, seen, reached):
 def entry(db, session, agent, project, places, source, room):
     try:
         db.execute("begin immediate")
-        rows, scopes = entered(db, project, places, index.injected_slugs(db, session, agent), index.reached_projects(session, agent))
+        rows, scopes = entered(db, project, places, index.injected_slugs(db, session, agent), index.reached(session, agent))
         index.record_reached(session, agent, scopes)
         if not rows:
             return []
@@ -232,6 +243,35 @@ def entry(db, session, agent, project, places, source, room):
     finally:
         db.commit()
     return [head, *rule_part, *blocks]
+
+
+def subjects(tool, text, project):
+    """the notes other than rules whose trigger fits the call, where their scope reaches the session's folder or one
+    the call leads into"""
+    places = {project, *map(vault.project_of, vault.paths_in(text))}
+    return list(dict.fromkeys(
+        t["slug"] for t in index.triggers()
+        if t["type"] != "rules" and any(vault.in_scope(t["project"], p) for p in places)
+        and rules.fits(t["tool"], t["pattern"], tool, text)
+    ))
+
+
+def brought(db, session, agent, slugs, room):
+    """the notes a call is about that this session lacks. every one goes in the reached record, brought or already
+    here, so mem-gate stops handing the call over for them"""
+    try:
+        db.execute("begin immediate")
+        seen = index.injected_slugs(db, session, agent)
+        rows = [r for s in slugs if s not in seen and (r := index.note_row(db, s))]
+        index.record_reached(session, agent, slugs)
+        if not rows:
+            return []
+        head = room.take("memory this call is about")
+        blocks, shown = section(db, rows, room)
+        index.record_injected(db, session, agent, shown, "tool")
+    finally:
+        db.commit()
+    return [head, *blocks]
 
 
 def doc_of(db, row):
@@ -293,12 +333,13 @@ def turn_lines(db, project, cued, query, transcript_path, room):
 
 
 def recall(payload):
-    """a folder's notes come in the first time the session reaches it, and a prompt also gets the rules for the turn
-    and the notes in scope judged by meaning"""
+    """a folder's notes come in the first time the session reaches it, a note comes in the first time a call fits its
+    trigger, and a prompt also gets the rules for the turn and the notes in scope judged by meaning"""
     event = payload.get("hook_event_name", "")
     session = payload.get("session_id", "")
     agent = payload.get("agent_id") or ""
     project = vault.project_of(payload.get("cwd", ""))
+    about = []
     if event == "UserPromptSubmit":
         # the app puts its reminders, recent project folders among them, in front of what the user wrote
         source, text = "prompt", REMINDER.sub("", payload.get("prompt", "")).strip()
@@ -306,11 +347,12 @@ def recall(payload):
         source, text = "tool", tool_text(payload.get("tool_name", ""), payload.get("tool_input") or {})
         if touches_memory(text):
             return None
+        about = subjects(payload.get("tool_name", ""), text, project)
     # background task events and messages from subagents or other sessions arrive as prompts too, often, and carry
     # paths out of reports, so they bring neither folders nor the model
     typed = source == "prompt" and bool(text) and not text.lstrip().startswith(EVENTS)
     places = places_in(project, text) if source == "tool" or typed else set()
-    if source == "tool" and not places:
+    if source == "tool" and not places and not about:
         return None
     db = index.connect(vec=source == "prompt")
     room = Room()
@@ -325,6 +367,8 @@ def recall(payload):
         out += safe(turn_lines, db, project, cued, query, path, room, default=[])
     if places:
         out += entry(db, session, agent, project, places, source, room)
+    if about:
+        out += brought(db, session, agent, about, room)
     if typed:
         out += safe(judged, db, session, agent, project, query, room, default=[])
     if not out:

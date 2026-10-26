@@ -1,6 +1,7 @@
 // mem-gate answers the memory plugin's tool call hooks in a few milliseconds. On its own it hands the call to
-// `mem recall` only when a path in it leads into a folder that has notes the session has not reached yet, and as
-// `mem-gate cues` it puts the cues of cues.go next to the call's result.
+// `mem recall` only when a path in it leads into a folder that has notes the session has not reached yet, or when
+// the call fits the trigger of a note the session has not got yet, and as `mem-gate cues` it puts the cues of
+// cues.go next to the call's result.
 package main
 
 import (
@@ -88,7 +89,11 @@ func mayBringNotes(p payload) bool {
 			}
 		}
 	}
-	return false
+
+	places := placesOf(p.Cwd, text)
+	return slices.ContainsFunc(loadTriggers(vault), func(tr trigger) bool {
+		return tr.Type != "rules" && !slices.Contains(reached, tr.Slug) && tr.reaches(places) && tr.fits(p.ToolName, text)
+	})
 }
 
 func toolText(name string, input map[string]any) string {

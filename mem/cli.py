@@ -50,7 +50,8 @@ def parse(argv):
     s.add_argument("--title", required=True)
     s.add_argument("--tags", nargs="*", default=[])
     s.add_argument("--links", nargs="*", default=[])
-    s.add_argument("--project")
+    s.add_argument("--project", default="global", help="a git root only when the note means nothing outside that project")
+    s.add_argument("--when", nargs="*", default=[], help="Tool:regex triggers for the calls where the note matters")
     s.add_argument("--body")
     s = sub.add_parser("lesson", help="log a mistake, first alone to see the closest rules, then with --rule or --new")
     s.add_argument("what", help="what went wrong, in one line")
@@ -118,9 +119,7 @@ def run(args):
             print(note.path.read_text(encoding="utf-8"))
         case "save":
             body = args.body if args.body is not None else sys.stdin.read()
-            project = args.project or vault.project_of(os.getcwd())
-            note = save_note(args.type, args.title, body, args.tags, args.links, project)
-            print(f"saved {note.slug} at {note.path.as_posix()}")
+            print(saved(save_note(args.type, args.title, body, args.tags, args.links, args.project, args.when)))
         case "lesson":
             from . import rules
 
@@ -150,9 +149,13 @@ def run(args):
             serve()
 
 
-def save_note(type, title, body, tags, links, project):
+def save_note(type, title, body, tags, links, project, when=()):
+    from . import rules
+
     if type not in SAVED:
         raise vault.Refused(f"type must be one of {', '.join(SAVED)}, rules change through mem lesson")
+    if error := rules.triggers_error(when):
+        raise vault.Refused(error)
     slug = vault.slugify(title)
     if links:
         body = body.rstrip() + "\n\nrelated " + " ".join(f"[[{l}]]" for l in links)
@@ -163,17 +166,27 @@ def save_note(type, title, body, tags, links, project):
             f"the body has {len(body)} characters, a note stays under {vault.BODY_MAX} so a hook can carry it next to "
             "others. keep only what a later task needs, or split it by subject"
         )
-    note = vault.Note(slug=slug, type=type, title=title, body=body, project=project, tags=list(tags))
+    note = vault.Note(slug=slug, type=type, title=title, body=body, project=project, tags=list(tags), when=list(when))
     # a save under another type moves the note, since the index holds one note per slug
     old = [p for t in vault.TYPES if (p := vault.vault_path() / t / f"{slug}.md").exists()]
     if old:
-        note.created = vault.read_note(old[0]).created
+        before = vault.read_note(old[0])
+        note.created = before.created
+        # a save that only rewrites the body keeps what brings the note back
+        note.when = note.when or before.when
     for path in old:
         path.unlink()
     vault.write_note(note)
     index.index(index.connect(vec=True))
     git.commit([note.path, *old], f"save {slug}")
     return note
+
+
+def saved(note):
+    """where the note went and what its triggers would have fit lately"""
+    from . import rules
+
+    return "\n".join([f"saved {note.slug} at {note.path.as_posix()}", *rules.reach_lines(note.when, note.project)])
 
 
 def set_done(slug):
@@ -239,13 +252,12 @@ def check_report():
 
 
 def trigger_reach():
-    """each trigger with the recent calls in its rule's scope it fits, the ones fitting most first"""
+    """each trigger with the recent calls in its note's scope it fits, the ones fitting most first"""
     from . import rules
 
-    path = vault.mem_dir() / "triggers.json"
     calls = rules.recent_calls()
     out = []
-    for t in json.loads(path.read_text(encoding="utf-8")) if path.exists() else []:
+    for t in index.triggers():
         when = f"{t['tool']}:{t['pattern']}"
         fits, total = rules.reach(when, t["project"], calls)
         out.append({"slug": t["slug"], "when": when, "fits": len(fits), "total": total, "like": list(dict.fromkeys(fits))[:2]})
@@ -314,7 +326,7 @@ def render_check(r):
     if h["long_bodies"]:
         out.append("bodies over the cap " + ", ".join(h["long_bodies"]))
     if r["triggers"]:
-        out.append("triggers by the share of recent calls in scope they fit, each should fit only calls its rule speaks to")
+        out.append("triggers by the share of recent calls in scope they fit, each should fit only calls its note speaks to")
         for t in r["triggers"]:
             out.append(f"{t['fits']}/{t['total']} {t['slug']} {t['when']}")
             out += [f"  {' '.join(text.split())[:100]}" for text in t["like"]]

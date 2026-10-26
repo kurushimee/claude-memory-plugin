@@ -34,6 +34,7 @@ var (
 
 type trigger struct {
 	Slug    string `json:"slug"`
+	Type    string `json:"type"`
 	Project string `json:"project"`
 	Tool    string `json:"tool"`
 	Pattern string `json:"pattern"`
@@ -271,20 +272,11 @@ func logCall(vault, tool, text string, places []string) {
 }
 
 // rules brings up each rule whose trigger fits the call once per turn, where the rule's scope reaches one of the
-// call's places.
+// call's places. The other notes' triggers bring their notes through mem recall.
 func (t *turn) rules(vault, tool, text string, places []string) []string {
-	raw, err := os.ReadFile(filepath.Join(vault, ".mem", "triggers.json"))
-	var triggers []trigger
-	if err != nil || json.Unmarshal(raw, &triggers) != nil {
-		return nil
-	}
-
 	var out []string
-	for _, tr := range triggers {
-		if t.cued[tr.Slug] || !slices.ContainsFunc(places, func(place string) bool { return inScope(tr.Project, place) }) {
-			continue
-		}
-		if !matches("^(?:"+tr.Tool+")$", tool) || !matches(tr.Pattern, text) {
+	for _, tr := range loadTriggers(vault) {
+		if tr.Type != "rules" || t.cued[tr.Slug] || !tr.reaches(places) || !tr.fits(tool, text) {
 			continue
 		}
 
@@ -297,6 +289,23 @@ func (t *turn) rules(vault, tool, text string, places []string) []string {
 		out = append(out, cue)
 	}
 	return out
+}
+
+func loadTriggers(vault string) []trigger {
+	raw, err := os.ReadFile(filepath.Join(vault, ".mem", "triggers.json"))
+	var triggers []trigger
+	if err != nil || json.Unmarshal(raw, &triggers) != nil {
+		return nil
+	}
+	return triggers
+}
+
+func (tr trigger) reaches(places []string) bool {
+	return slices.ContainsFunc(places, func(place string) bool { return inScope(tr.Project, place) })
+}
+
+func (tr trigger) fits(tool, text string) bool {
+	return matches("^(?:"+tr.Tool+")$", tool) && matches(tr.Pattern, text)
 }
 
 func matches(pattern, text string) bool {

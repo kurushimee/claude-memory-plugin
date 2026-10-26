@@ -7,7 +7,7 @@
     "PostToolUse": [
       { "hooks": [{ "type": "command", "command": "mem-gate", "args": ["cues"], "timeout": 5 }] },
       { "matcher": "Agent|SubagentHandback", "hooks": [{ "type": "command", "command": "mem", "args": ["journal"], "timeout": 10 }] },
-      { "matcher": "Read|Edit|Write|Grep|Glob|Bash|PowerShell", "hooks": [{ "type": "command", "command": "mem-gate", "async": true }] }
+      { "hooks": [{ "type": "command", "command": "mem-gate", "async": true }] }
     ],
     "PostToolUseFailure": [{ "hooks": [{ "type": "command", "command": "mem-gate", "args": ["cues"], "timeout": 5 }] }]
   }

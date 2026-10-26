@@ -8,7 +8,6 @@ import time
 
 from . import git, index, vault
 
-CAP = {"global": 20, "project": 15}
 TITLE_MAX = 140
 WHAT_MAX = 200
 CHECK_MAX = 800  # every cue carries the whole check
@@ -83,9 +82,9 @@ def lesson(what, by, place, rule=None, new=None, sharpen=None, why=None, check=N
     db = index.connect(vec=True)
     index.index(db)
     if rule:
-        return strengthen(db, rule, incident(what, by, place), by, sharpen, check, when)
+        return strengthen(db, rule, incident(what, by, place), by, sharpen, check, when, place)
     if new:
-        return add(db, new, incident(what, by, place), why, check, when, scope)
+        return add(new, incident(what, by, place), why, check, when, scope)
     return closest(db, what, by, place)
 
 
@@ -108,7 +107,7 @@ def triggers_error(when):
     return None
 
 
-def strengthen(db, slug, entry, by, sharpen, check, when):
+def strengthen(db, slug, entry, by, sharpen, check, when, place):
     path = vault.vault_path() / "rules" / f"{slug}.md"
     if not path.exists():
         raise vault.Refused(f"no rule {slug}, mem lesson without --rule lists the closest ones")
@@ -128,12 +127,21 @@ def strengthen(db, slug, entry, by, sharpen, check, when):
     added = [w for w in dict.fromkeys(when) if w not in note.when]
     note.when += added
     note.updated = vault.today()
+    # a rule that bit in a second project holds beyond its own
+    moved = note.project != "global" and place != "global" and not vault.in_scope(note.project, place)
+    out = [f"strengthened {slug}, {len(vault.incidents(note.body))} incidents now"]
+    if moved:
+        out.append(
+            f"moved it to global, it bit in {note.project} and in {place}. if its title names either one, give it a "
+            "title said for any project with --sharpen"
+        )
+        note.project = "global"
     save(note, f"lesson {slug}")
-    out = [f"strengthened {slug}, {len(vault.incidents(note.body))} incidents now", *reach_lines(added, note.project)]
+    out += reach_lines(added, note.project)
     return "\n".join(out + [CODE_FIX])
 
 
-def add(db, title, entry, why, check, when, scope):
+def add(title, entry, why, check, when, scope):
     if not why or not check:
         raise vault.Refused("a new rule needs --why and --check")
     if len(title) > TITLE_MAX:
@@ -142,13 +150,6 @@ def add(db, title, entry, why, check, when, scope):
     slug = vault.slugify(title)
     if (vault.vault_path() / "rules" / f"{slug}.md").exists():
         raise vault.Refused(f"rule {slug} exists, strengthen it with --rule {slug}")
-    count = sum(1 for r in index.list_notes(db, None, ("rules",), 500) if r["project"] == scope)
-    cap = CAP["global" if scope == "global" else "project"]
-    if count >= cap:
-        raise vault.Refused(
-            f"{scope} has {count} rules, the cap is {cap}. fold this lesson into the closest rule with --rule and "
-            "--sharpen, or merge two rules first"
-        )
     body = f"why {why}\n\ncheck {check}\n\nincidents\n{entry}"
     save(vault.Note(slug=slug, type="rules", title=title, body=body, project=scope, when=when), f"rule {slug}")
     return "\n".join([f"added rule {slug}", *reach_lines(when, scope), CODE_FIX])
@@ -183,8 +184,12 @@ def reach(when, project, calls):
     """the texts of the calls in the rule's scope that a trigger fits, and how many calls were in its scope"""
     tool, _, pattern = when.partition(":")
     here = [c for c in calls if any(vault.in_scope(project, p) for p in c.get("places") or [])]
-    fits = [c["text"] for c in here if re.fullmatch(tool, c["tool"], re.I) and re.search(pattern, c["text"], re.I)]
-    return fits, len(here)
+    return [c["text"] for c in here if fits(tool, pattern, c["tool"], c["text"])], len(here)
+
+
+def fits(trigger_tool, pattern, tool, text):
+    """a trigger fits a call the way mem-gate matches it, the tool part against the whole tool name"""
+    return bool(re.fullmatch(trigger_tool, tool, re.I) and re.search(pattern, text, re.I))
 
 
 def reach_lines(when, project):
@@ -220,25 +225,19 @@ def save(note, message):
 
 
 def closest(db, what, by, place):
-    rows = index.by_meaning(db, in_scope(db, place), what)[:CLOSEST]
+    """the closest rules from every project, since one another project already has covers this case too"""
+    rows = index.by_meaning(db, in_scope(db, None), what)[:CLOSEST]
     out = ["closest rules"]
     for r in rows:
         check = vault.section(index.body_of(db, r["slug"]), "check")
-        out += [f"{line(db, r)} [{r['slug']}]", f"  check {check}"]
+        where = "" if r["project"] == "global" else f" in {r['project']}"
+        out += [f"{line(db, r)} [{r['slug']}]{where}", f"  check {check}"]
     out += [
         f'if one covers it, strengthen it with mem lesson "<what>" --by {by} --rule <slug>, and when it missed this '
-        'case add --sharpen "<title>", --check "<a sentence the check gains>" or --when "Tool:regex"',
+        'case add --sharpen "<title>", --check "<a sentence the check gains>" or --when "Tool:regex". one from '
+        "another project moves to global",
         "if none does, write the general behavior behind it, not this one case, with --new \"<title>\" --why \"...\" "
-        '--check "..." --when "Tool:regex", plus --scope <project> when it only holds there',
-        counts(db, place),
+        '--check "..." --when "Tool:regex", plus --scope <project> only when it is about that project\'s own code or '
+        "design",
     ]
     return "\n".join(out)
-
-
-def counts(db, place):
-    rows = index.list_notes(db, None, ("rules",), 500)
-    out = f"global has {sum(1 for r in rows if r['project'] == 'global')} of {CAP['global']} rules"
-    if place != "global":
-        here = sum(1 for r in rows if r["project"] == place)
-        out += f", {place} has {here} of {CAP['project']}"
-    return out
