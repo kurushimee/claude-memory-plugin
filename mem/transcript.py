@@ -3,12 +3,16 @@ megabytes"""
 
 import json
 import re
+import shlex
 
 TAIL = 256 * 1024
 REPLY_CHARS = 800
 NO_REPLY = "No response requested."
 INTERRUPT = "[Request interrupted by user"
 REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
+SHOW = re.compile(r"\bmem(?:\.exe)? show ([^|;&\n]+)")
+READ = re.compile(r"\bmem(?:\.exe)? (?:show|search) ")
+SHELLS = ("Bash", "PowerShell")
 
 
 def entries(path, tail=TAIL):
@@ -84,20 +88,65 @@ def stops(path):
     return interrupted, denied
 
 
-def user_messages(path):
-    """what the user typed in this session, oldest first, read from the whole file"""
+def whole(path, *marks):
+    """the entries of the whole file whose line holds one of the marks, the cheap test that skips most of it"""
     out = []
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
             for raw in f:
-                if '"kind":"human"' not in raw:
+                if not any(m in raw for m in marks):
                     continue
                 try:
-                    entry = json.loads(raw)
+                    out.append(json.loads(raw))
                 except ValueError:
                     continue
-                if text := REMINDER.sub("", said(entry)).strip():
-                    out.append(text)
     except (OSError, TypeError):
         return []
     return out
+
+
+def user_messages(path):
+    """what the user typed in this session, oldest first"""
+    return [text for e in whole(path, '"kind":"human"') if (text := REMINDER.sub("", said(e)).strip())]
+
+
+def turns(path):
+    """the tool calls of each turn the user started by typing, as (name, input) in order"""
+    out = []
+    for entry in whole(path, '"kind":"human"', '"tool_use"'):
+        if entry.get("isSidechain"):
+            continue
+        if typed(entry):
+            out.append([])
+            continue
+        content = (entry.get("message") or {}).get("content")
+        if out and entry.get("type") == "assistant" and isinstance(content, list):
+            out[-1] += [(c.get("name", ""), c.get("input") or {}) for c in content if c.get("type") == "tool_use"]
+    return out
+
+
+def shown(name, tool_input):
+    """the notes a call opened, by the names it gave"""
+    if name.endswith("memory_show"):
+        names = tool_input.get("names") or tool_input.get("slug") or []
+        return [n for n in ([names] if isinstance(names, str) else names) if isinstance(n, str)]
+    command = tool_input.get("command")
+    if name not in SHELLS or not isinstance(command, str) or not (m := SHOW.search(command)):
+        return []
+    try:
+        return shlex.split(m.group(1))
+    except ValueError:
+        return []
+
+
+def reads_memory(name, tool_input):
+    """whether a call opens or searches memory"""
+    if name.endswith(("memory_show", "memory_search")):
+        return True
+    command = tool_input.get("command")
+    return name in SHELLS and isinstance(command, str) and bool(READ.search(command))
+
+
+def opened(path):
+    """every note the agent opened this session, by the names it gave, oldest first"""
+    return [n for turn in turns(path) for call in turn for n in shown(*call)]

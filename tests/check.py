@@ -70,7 +70,7 @@ godot = cli.save_note("facts", "godot runs must end themselves", "every godot ru
 left = cli.save_note("leftovers", "finish the cascade probe debug view", "the probe view in radiance-cascades is half done, next step is wiring the toggle", [], [], project)
 added = rules.lesson(
     "a two word prompt hid the biggest job of the day", "user", "global", new="never size the effort by how long the prompt is",
-    why="a two word prompt can carry the biggest job of the day", check="size the work by what it asks for", when=["Bash|PowerShell:godot"],
+    why="a two word prompt can carry the biggest job of the day", check="size the work by what it asks for",
 )
 assert added.startswith("added rule") and "fix that code too" in added, added
 fb = vault.read_note(vault_dir / "rules" / "never-size-the-effort-by-how-long-the-prompt-is.md")
@@ -125,19 +125,12 @@ except vault.Refused as e:
 again = rules.lesson("sized a two word prompt as a small job", "user", project, rule=fb.slug, check="count what the prompt asks for")
 assert "2 incidents now" in again, again
 sharpened = "never size the effort of a task by the length of its prompt"
-rules.lesson("treated a short prompt as a small job again", "user", project, rule=fb.slug, sharpen=sharpened, check="read what the prompt asks for, then size it", when=["Agent:research"])
+rules.lesson("treated a short prompt as a small job again", "user", project, rule=fb.slug, sharpen=sharpened, check="read what the prompt asks for, then size it")
 fb = vault.read_note(fb.path)
 grown = "size the work by what it asks for. count what the prompt asks for. read what the prompt asks for, then size it"
 assert fb.title == sharpened and fb.slug == "never-size-the-effort-by-how-long-the-prompt-is" and vault.section(fb.body, "check") == grown, fb.body
-assert [who for _, who in vault.incidents(fb.body)] == ["user"] * 3 and fb.when == ["Bash|PowerShell:godot", "Agent:research"]
-triggers = json.loads((vault_dir / ".mem" / "triggers.json").read_text(encoding="utf-8"))
-assert {(t["tool"], t["pattern"]) for t in triggers} == {("Bash|PowerShell", "godot"), ("Agent", "research")} and triggers[0]["title"] == sharpened
-for bad in ("Bash:(?<=x)godot", "godot", "Bash:(unclosed"):
-    try:
-        rules.lesson("x", "self", project, rule=fb.slug, when=[bad])
-        raise AssertionError(f"a trigger mem-gate can't run got in, {bad}")
-    except vault.Refused:
-        pass
+assert [(who, where) for _, who, where in vault.incidents(fb.body)] == [("user", "global"), ("user", project), ("user", project)], fb.body
+assert rules.line(db, index.note_row(db, fb.slug)) == f"- {sharpened} (3 times in 1 project)", "global counted as a project, or a project counted twice"
 too_long = (
     ({"what": "x" * (rules.WHAT_MAX + 1), "rule": fb.slug}, "a what past its cap"),
     ({"what": "x", "rule": fb.slug, "check": "y" * rules.CHECK_MAX}, "a check grown past its cap"),
@@ -161,18 +154,8 @@ assert "moved it to global" in rules.lesson("left a capture running again", "sel
 assert vault.read_note(far_rule.path).project == "global", "a rule that bit in a second project stayed in its first"
 far_rule.path.unlink()
 index.index(db)
-calls_log = vault_dir / ".mem" / "calls.jsonl"
-logged_calls = [
-    {"tool": "Bash", "text": "Bash cmake --build build", "places": [project]},
-    {"tool": "Bash", "text": "Bash ls", "places": [project]},
-    {"tool": "Bash", "text": "Bash cmake --build far", "places": [elsewhere.as_posix()]},
-]
-calls_log.write_text("".join(json.dumps(c) + "\n" for c in logged_calls), encoding="utf-8")
-fit_lines = rules.reach_lines(["Bash:cmake"], project)
-assert fit_lines[:2] == ["Bash:cmake fits 1 of the last 2 calls in scope, like", "  Bash cmake --build build"] and fit_lines[-1].startswith("narrow"), fit_lines
-calls_log.unlink()
 health = index.health(db, project)
-assert (health["lessons_week"], health["lessons_by_user"], health["lessons_repeats"]) == (3, 3, 2), health
+assert (health["lessons_week"], health["lessons_by_user"], health["lessons_repeats"], health["lessons_missed"]) == (3, 3, 2, 2), health
 assert "3 lessons this week (3 spotted by the user, 2 repeats of a rule)" in health["line"], health["line"]
 assert not re.search(r"\b0 (dupe|stale|conflicts|hook|unpushed|dead|bodies)", health["line"]), health["line"]
 dead_note = vault.Note(slug="points-nowhere", type="facts", title="points nowhere", body="see [[no-such-note]]", project=project)
@@ -196,9 +179,8 @@ pass_log.unlink()
 
 
 def fake_scores(query, docs):
-    """godot past the body gate, ghidra between the gates, the rest nowhere"""
-    between = (judge.TITLE_GATE + judge.BODY_GATE) / 2
-    return [judge.BODY_GATE if d.startswith(godot.title) else between if d.startswith(ghidra.title) else 0 for d in docs]
+    """godot at the body gate, ghidra just under it, the rest nowhere"""
+    return [judge.BODY_GATE if d.startswith(godot.title) else judge.BODY_GATE / 2 if d.startswith(ghidra.title) else 0 for d in docs]
 
 
 def context(result):
@@ -208,11 +190,11 @@ def context(result):
 real_scores, judge.scores = judge.scores, fake_scores
 prompt = {"hook_event_name": "UserPromptSubmit", "session_id": "s0", "cwd": project, "prompt": f"why does {elsewhere} fail to build"}
 first = context(hooks.recall(prompt))
-assert away.title in first and f"## {godot.title}" in first, first
-assert f"- {ghidra.title} ({ghidra.slug})" in first and "ghidra 12 sits" not in first, "a title past the loose gate comes without its body"
-assert hooks.LESSON in first and "rules for this turn" in first and sharpened in first, first
+assert f"- {away.title}" in first and "ninja on the path" not in first and f"## {godot.title}" in first, first
+assert ghidra.title not in first, "a note under the body gate came in"
+assert hooks.LESSON in first and sharpened not in first, "a rule came in with a prompt"
 second = context(hooks.recall(prompt))
-assert away.title not in second and f"## {godot.title}" not in second and ghidra.slug not in second, "a folder, a body or a title came twice"
+assert away.title not in second and f"## {godot.title}" not in second, "a folder or a body came twice"
 assert hooks.LESSON in second, "the lesson line comes with every prompt the user typed"
 index.stamp_compacted(db, "s0", "")
 again = context(hooks.recall(prompt))
@@ -279,35 +261,13 @@ assert gate(gated) == "", "the gate let a reached folder through"
 assert gate({**gated, "tool_input": {"file_path": f"{project}/facts/x.md"}}) == ""
 
 assert cli.parse(["save", "--type", "facts", "--title", "x"]).project == "global", "a save with no project landed in one"
-try:
-    cli.save_note("facts", "a note with a bad trigger", "x", [], [], "global", ["godot"])
-    raise AssertionError("a note trigger mem-gate can't run got in")
-except vault.Refused:
-    pass
-fx = cli.save_note("facts", "reshade fx compiles twice", "reshade's own fxc passes code the sdk fxc refuses, so both compile it", ["reshade"], [], "global", ["Bash|PowerShell:\\.fx\\b"])
-assert vault.read_note(cli.save_note("facts", fx.title, "both fxc builds compile every .fx", ["reshade"], [], "global").path).when == fx.when, "a body rewrite dropped the triggers"
-local = cli.save_note("facts", "the vault builds with make", "make all builds it", [], [], project, ["Bash:make"])
-compiled = {"hook_event_name": "PostToolUse", "session_id": "t1", "cwd": elsewhere.as_posix(), "tool_name": "Bash", "tool_input": {"command": "fxc /T fx_5_0 boost.fx"}}
-got = context(hooks.recall(compiled))
-assert "memory this call is about" in got and "both fxc builds" in got, got
-assert hooks.recall(compiled) is None, "a note a call is about came twice"
-assert hooks.recall({**compiled, "tool_input": {"command": "make all"}}) is None, "a project note came by its trigger outside its project"
-assert "both fxc builds" in gate({**compiled, "session_id": "t2"}), "the gate kept back a note the call is about"
-assert gate({**compiled, "session_id": "t2"}) == "", "the gate handed over a note the session already got"
-assert cue({**compiled, "session_id": "t3"}) == "", "a note's trigger came as a rule cue"
-for note in (fx, local):
-    cli.forget_note(note.slug)
 
 call = {"hook_event_name": "PostToolUse", "session_id": "c1", "agent_id": "", "cwd": project, "tool_name": "Bash", "tool_input": {"command": "godot --headless -s capture.gd"}}
 started = time.perf_counter()
 found = cue(call)
 took = time.perf_counter() - started
-assert found.startswith(f"a rule fits this call, {sharpened}\ncheck {grown}"), found
-assert {"tool": "Bash", "text": "Bash godot --headless -s capture.gd", "places": [project]} in [json.loads(l) for l in calls_log.read_text(encoding="utf-8").splitlines()]
-assert cue(call) == "", "a rule came twice in one turn"
-assert cue({**call, "session_id": "c0", "tool_name": "Read"}) == "", "a rule fired on a tool its trigger doesn't name"
-assert cue({**call, "session_id": "c0", "tool_input": {"command": "ls"}}) == "", "a rule fired on a call its pattern doesn't fit"
-failed = {**call, "hook_event_name": "PostToolUseFailure", "tool_input": {"command": "make all"}}
+assert found == "", "a call with nothing wrong got a cue"
+failed ={**call, "hook_event_name": "PostToolUseFailure", "tool_input": {"command": "make all"}}
 assert cue(failed).startswith("this call failed"), "a failed call got no cue"
 assert cue(failed).startswith("this exact call already failed"), "a repeated failure got no cue"
 assert cue({**failed, "is_interrupt": True}) == "", "an interrupt counted as a failure"
@@ -323,46 +283,12 @@ heard = {"type": "attachment", "attachment": {"type": "queued_command", "prompt"
 working = write_transcript(tmp / "working.jsonl", typed("fix it"), said("on it"), heard)
 assert "sent a message while you worked" in cue({**call, "tool_input": {"command": "ls"}, "transcript_path": working})
 assert cue({**call, "tool_input": {"command": "ls"}, "transcript_path": working}) == "", "one message got the cue twice"
-cued = context(hooks.recall({**prompt, "session_id": "c1", "prompt": "is it done"}))
-assert f"rules for this turn" in cued and sharpened in cued
-assert cue(call).startswith("a rule fits this call"), "a new turn kept the last turn's cues"
-project_rule = vault.Note(slug="ninja-goes-on-the-path", type="rules", title="ninja goes on the path", body="why it builds with ninja\n\ncheck where ninja\n\nincidents\n- 2026-10-25 user in x, built without it", project=elsewhere.as_posix(), when=["Bash:cmake"])
-vault.write_note(project_rule)
-index.index(db)
-assert cue({**call, "session_id": "c2", "tool_input": {"command": "cmake --build ."}}) == "", "a project rule fired outside its project"
-assert "ninja goes on the path" in cue({**call, "session_id": "c3", "tool_input": {"command": f"cmake --build {elsewhere.as_posix()}/build"}})
-wrapped = {**call, "session_id": "c4", "tool_name": "mcp__ccd_turn__wrap_up", "tool_input": {"recap": "done"}}
-vault.write_note(vault.Note(slug="look-before-calling-it-done", type="rules", title="look at the result before calling it done", body="why x\n\ncheck y\n\nincidents\n- 2026-10-25 user in x, y", when=["mcp__ccd_turn__wrap_up:."]))
-index.index(db)
-assert "look at the result" in cue(wrapped), "an MCP tool trigger never fired"
-vault.write_note(vault.Note(slug="godot-edits-get-a-run", type="rules", title="godot edits get a test run", body="why x\n\ncheck y\n\nincidents\n- 2026-10-25 user in x, y", when=["Edit:godot"]))
-index.index(db)
-note_edit = {**call, "session_id": "c5", "tool_name": "Edit", "tool_input": {"file_path": godot.path.as_posix()}}
-assert cue(note_edit) == "", "a vault note's file name fit a trigger"
-vault.write_note(vault.Note(slug="facts-edits-say-it-generally", type="rules", title="facts edits say it generally", body="why x\n\ncheck y\n\nincidents\n- 2026-10-26 user in x, y", when=[r"Edit:[\\/]facts[\\/]\*\.md$"]))
-index.index(db)
-folder_cue = cue({**note_edit, "session_id": "c10"})
-assert "facts edits say it generally" in folder_cue and "godot edits" not in folder_cue, "a vault folder trigger missed a note edit"
-(vault_dir / "rules" / "facts-edits-say-it-generally.md").unlink()
-index.index(db)
+hooks.recall({**prompt, "session_id": "c1", "prompt": "is it done"})
+assert cue(failed).startswith("this call failed"), "a new turn kept the last turn's failures"
 vault.write_note(long_note)
-over = cue({**note_edit, "session_id": "c7", "tool_input": {"file_path": long_note.path.as_posix()}})
+over = cue({**call, "session_id": "c7", "tool_name": "Edit", "tool_input": {"file_path": long_note.path.as_posix()}})
 assert f"body at {vault.BODY_MAX + 1} characters" in over, "an edit that left a note over the cap got no cue"
 long_note.path.unlink()
-assert "godot edits get a test run" in cue({**note_edit, "session_id": "c6", "tool_input": {"file_path": f"{elsewhere.as_posix()}/godot_runner.py"}})
-docs_rule = vault.Note(slug="elsewhere-docs-stay-short", type="rules", title="elsewhere docs stay short", body="why x\n\ncheck y\n\nincidents\n- 2026-10-25 user in x, y", project=elsewhere.as_posix(), when=["Edit:\\.md$"])
-vault.write_note(docs_rule)
-index.index(db)
-from_elsewhere = {**note_edit, "session_id": "c8", "cwd": elsewhere.as_posix()}
-assert cue(from_elsewhere) == "", "a vault note edit counted as work in the session's folder"
-assert "elsewhere docs stay short" in cue({**from_elsewhere, "session_id": "c9", "tool_input": {"file_path": f"{elsewhere.as_posix()}/README.md"}})
-calls_log.write_text("x" * (1 << 20) + "\n", encoding="utf-8")
-cue({**call, "session_id": "c7", "tool_input": {"command": "ls"}})
-old_calls = vault_dir / ".mem" / "calls.old.jsonl"
-assert old_calls.exists() and old_calls.stat().st_size > 1 << 20 and calls_log.stat().st_size < 1000, "the calls log grew past its cap"
-for path in (project_rule.path, vault_dir / "rules" / "look-before-calling-it-done.md", vault_dir / "rules" / "godot-edits-get-a-run.md", docs_rule.path):
-    path.unlink()
-index.index(db)
 
 asked = {"hook_event_name": "PostToolUse", "session_id": "s2", "cwd": project, "tool_name": "Agent", "tool_input": {"description": "QD-OLED ABL timing research", "prompt": "find the abl timing"}, "tool_response": {"status": "async_launched", "agentId": "ag1"}}
 assert hooks.journal(asked) is None, "a first question came back as asked before"
@@ -382,7 +308,11 @@ assert attempts.read(project)[-1]["answer"] == "35 rules", "a handed back report
 
 away.path.write_text(away.path.read_text(encoding="utf-8") + "\nand cmake 3.30\n", encoding="utf-8")
 index.index(db)
-start = {"hook_event_name": "SessionStart", "session_id": "s2", "source": "startup", "cwd": project}
+(vault_dir / "system").mkdir(exist_ok=True)
+(vault_dir / "system" / "working.md").write_text("open what the task touches\n", encoding="utf-8")
+sh("git", "-C", str(vault_dir), "add", "system/working.md")
+sh("git", "-C", str(vault_dir), "commit", "-q", "-m", "way of working")
+start ={"hook_event_name": "SessionStart", "session_id": "s2", "source": "startup", "cwd": project}
 text = context(hooks.brief(start))
 assert f"edit {away.slug}" in sh("git", "-C", str(bare), "log", "--oneline", "main").stdout, "an edit some other index call saw first never got committed"
 assert "journal/" in sh("git", "-C", str(bare), "ls-tree", "-r", "--name-only", "main").stdout, "the journal never got committed"
@@ -390,21 +320,29 @@ sh("git", "-C", str(vault_dir), "commit", "-q", "--allow-empty", "-m", "offline"
 assert git.unpushed() == 1 and index.health(db, project)["unpushed"] == 1, "a commit no push reached went uncounted"
 git.push()
 assert git.unpushed() == 0
-assert rules.HEADER in text and f"- {sharpened} (3 times)" in text and "open leftovers" in text and left.title in text and "health:" in text, text
-assert f"- {ghidra.title} ({ghidra.slug})" in text and "ghidra 12 sits" not in text, "a global note without always comes as a title only"
-assert away.title not in text, "the brief carries nothing from other folders"
+assert text.startswith(f"memory index for {project}\n\nopen what the task touches\n\n{hooks.MISSED.format(2)}\n\n{rules.HEADER}"), text
+assert f"- {sharpened} (3 times in 1 project)" in text and f"open leftovers\n- {left.title}, open for 0d" in text and "health:" in text, text
+assert f"- {ghidra.title}" in text and f"- {godot.title}" in text and "ghidra 12 sits" not in text and "## " not in text, "the index carried a body"
+assert away.title not in text, "the index carries nothing from other folders"
 judge.scores = fake_scores
 fits = context(hooks.recall({**prompt, "session_id": "s2"}))
-assert ghidra.slug not in fits, "a title the brief listed came again"
-assert ghidra.slug not in {r["slug"] for r in index.injected_rows(db, "s2")}, "a title only note counted as remembered"
+assert f"## {godot.title}" in fits and ghidra.title not in fits, fits
+assert {r["slug"] for r in index.injected_rows(db, "s2")} == {godot.slug}, "a note counted as come in by itself that didn't"
 judge.scores = real_scores
-resumed = context(hooks.brief({**start, "source": "resume"}))
-assert sharpened in resumed and left.title not in resumed, "a resumed session lost its rules or got a body twice"
+assert context(hooks.brief({**start, "source": "resume"})).endswith(text[text.index("health:"):]), "a resumed session got another index"
 sub = context(hooks.brief({**start, "hook_event_name": "SubagentStart", "agent_id": "a1"}))
 assert "health:" not in sub and left.title in sub and sharpened in sub
-spoken = write_transcript(tmp / "spoken.jsonl", typed("make the brief fit"), said("on it"), heard, typed("and keep the rules"))
+
+
+def tool_call(name, **tool_input):
+    return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": name, "input": tool_input}]}}
+
+
+show = "mcp__plugin_memory_memory__memory_show"
+spoken = write_transcript(tmp / "spoken.jsonl", typed("make the brief fit"), said("on it"), tool_call(show, names=[ghidra.title]), heard, typed("and keep the rules"))
 after = context(hooks.brief({**start, "source": "compact", "transcript_path": spoken}))
-assert "before the squash" in after and godot.title in after, after
+before = next(b for b in after.split("\n\n") if b.startswith("opened or brought before the squash"))
+assert f"- {ghidra.title}" in before and f"- {godot.title}" in before, after
 assert "asked of subagents this session" in after and "QD-OLED ABL timing research, came back found nothing" in after, after
 said_at = after.index("the user's own words")
 assert after.index("- and keep the rules", said_at) < after.index("- stop, wrong file", said_at) < after.index("- make the brief fit", said_at), after
@@ -437,10 +375,22 @@ assert "local edit" in godot.path.read_text(encoding="utf-8")
 assert sh("git", "-C", str(vault_dir), "status", "--porcelain").stdout.strip() == "", sh("git", "-C", str(vault_dir), "status", "--porcelain").stdout
 assert "merge remote" in sh("git", "-C", str(bare), "log", "--oneline", "main").stdout
 
+cli.TRANSCRIPTS = tmp / "projects"
+(cli.TRANSCRIPTS / "F--x").mkdir(parents=True)
+write_transcript(
+    cli.TRANSCRIPTS / "F--x" / "s2.jsonl",
+    typed("fix the build"), tool_call(show, names=[sharpened, ghidra.slug]), tool_call("Bash", command="make"),
+    tool_call("mcp__ccd_turn__update_plan", advance=True), tool_call(show, slug=fb.slug), tool_call("mcp__ccd_turn__wrap_up", recap="done"),
+    typed("and the docs"), tool_call("Edit", file_path="x"), tool_call("AskUserQuestion", questions=[]),
+    tool_call("Bash", command=f'mem show "{ghidra.title}"'), tool_call("ExitPlanMode"),
+)
 report = cli.check_report()
 assert report["notes"] == report["indexed"] == 6 and report["health"]["conflicts"] == 1, (report["health"], report["log_tail"])
+assert report["sessions"] == [{"session": "s2", "folder": "F--x", "turns": 2, "started": 1, "handbacks": 3, "checked": 1}], report["sessions"]
+assert "F--x s2 started 1/2, rules before hand back 1/3" in cli.render_check(report)
 pane = cli.pane("s2", project)
-assert set(pane) == {"project", "vault", "health", "leftovers", "injected", "counts"} and pane["counts"]["recalled"] > 0
+assert set(pane) == {"project", "vault", "health", "leftovers", "opened", "injected", "counts"} and pane["counts"]["recalled"] == 1
+assert [n["slug"] for n in pane["opened"]] == [ghidra.slug, fb.slug] and pane["counts"]["opened"] == 2, pane["opened"]
 assert pane["health"]["lessons_by_user"] == 3, pane["health"]
 json.dumps(pane)
 
@@ -495,19 +445,18 @@ for i in range(45):
 for i in range(40):
     vault.write_note(vault.Note(slug=f"stress-global-{i}", type="facts", title=f"stress global {i} " + "word " * 10, body="x"))
 index.index(db)
-text, shown, listed = hooks.brief_text(index.connect(vec=True), project)
-assert len(text) < 10_000, f"the brief is {len(text)} characters, the app cuts it to a preview"
+text = hooks.brief_text(index.connect(vec=True), project)
+assert len(text) < 10_000, f"the index is {len(text)} characters, the app cuts it to a preview"
 assert text.count("\n- global rule") + text.count("\n- project rule") == 34, "a rule line got cut while it had room"
-assert "health:" in text and text.endswith(hooks.POINTER) and "more, mem search finds them" in text, text[-600:]
-lines = text.splitlines()
-assert shown and all(any(l.startswith("## ") and f"({s})" in l for l in lines) for s in shown), shown
+assert "health:" in text and text.endswith(hooks.POINTER) and "more with no room here, memory_search finds them" in text, text[-600:]
+assert "lorem" not in text and "ipsum" not in text, "the index carried a body"
 for i in range(19, 119):
     vault.write_note(vault.Note(slug=f"global-rule-{i}", type="rules", title=f"global rule {i} " + "word " * 24, body="why x\n\ncheck y\n\nincidents"))
 index.index(db)
-text = hooks.brief_text(index.connect(vec=True), project)[0]
+text = hooks.brief_text(index.connect(vec=True), project)
 kept = text.count("\n- global rule") + text.count("\n- project rule")
-assert len(text) < 10_000 and text.endswith(hooks.POINTER), f"a rulebook past the room took the brief to {len(text)} characters"
-assert kept < 134 and hooks.RULES_LEFT.format(134 - kept) in text, "the rules with no room went unnamed"
+assert len(text) < 10_000 and text.endswith(hooks.POINTER), f"a rulebook past the room took the index to {len(text)} characters"
+assert kept < 134 and hooks.MORE.format(134 - kept) in text, "the rules with no room went unnamed"
 for i in range(30):
     vault.write_note(vault.Note(slug=f"far-{i}", type="facts", title=f"far note {i}", body=("dolor " * 200).strip(), project=elsewhere.as_posix()))
 index.index(db)
@@ -559,7 +508,7 @@ if judge.MODEL.exists():
     docs = [hooks.doc_of(db, index.note_row(db, s)) for s in (godot.slug, away.slug)]
     try:
         real = judge.scores(hooks.query_of("godot keeps hanging when a test run never exits", ""), docs)
-        assert real and real[0] >= judge.BODY_GATE > judge.TITLE_GATE > real[1], real
+        assert real and real[0] >= judge.BODY_GATE > real[1], real
     except judge.Taken:
         print("the real judge check didn't run, another program holds the VRAM")
 
@@ -577,15 +526,22 @@ os.environ["CLAUDE_CODE_ENTRYPOINT"] = "cli"
 assert not mcp_server.extension_covers()
 
 
+assert index.named(db, godot.title.upper())["slug"] == godot.slug and index.named(db, godot.title[:-1])["slug"] == godot.slug
+assert index.named(db, "godot") is None, "a short name opened a note it only partly names"
+
+
 async def refused_then_shown():
     with anyio.fail_after(30):
         async with Client(mcp_server.mcp) as client:
-            return await client.call_tool("memory_show", {"slug": "no-such-note"}), await client.call_tool("memory_show", {"slug": godot.slug})
+            return (
+                await client.call_tool("memory_show", {"names": ["no-such-note"]}),
+                await client.call_tool("memory_show", {"names": [godot.title, ghidra.slug]}),
+            )
 
 
 refused, shown = anyio.run(refused_then_shown)
-assert refused.is_error and "no note with slug no-such-note" in refused.content[0].text, refused
-assert not shown.is_error and godot.title in shown.content[0].text, "a refused call took the server down"
+assert refused.is_error and "no note named no-such-note" in refused.content[0].text, refused
+assert not shown.is_error and f"# {godot.slug} at" in shown.content[0].text and "ghidra 12 sits" in shown.content[0].text, "a refused call took the server down"
 
 
 def writable(remove, path, _):

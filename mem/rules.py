@@ -1,33 +1,32 @@
 """The rulebook in rules/. Each note is one general behavior grown out of real mistakes. Its title is the rule, its
-body says why, what to check and lists the incidents behind it, and its triggers name the tool calls where mem-gate
-brings it up again."""
+body says why, what to check and lists the incidents behind it with the project each happened in, so the index shows
+how widely a rule holds."""
 
 import json
-import re
 import time
 
 from . import git, index, vault
 
 TITLE_MAX = 140
 WHAT_MAX = 200
-CHECK_MAX = 800  # every cue carries the whole check
+CHECK_MAX = 800  # the agent reruns the whole check before each step it covers
 CLOSEST = 3
-FOR_TURN = 5
-EXAMPLES = 3
-CALLS = ("calls.old.jsonl", "calls.jsonl")
-# mem-gate runs the triggers with Go's RE2, which has no lookaround and no backreferences
-NOT_RE2 = re.compile(r"\(\?<?[=!]|\\[1-9]")
 CODE_FIX = "if a tool, script or harness let this happen, fix that code too in this turn, so it can't happen the same way again"
-HEADER = "rules, each grew out of real mistakes, the count is how often it bit. a call that fits one brings it back with what to check"
+HEADER = (
+    "rules, each grew out of real mistakes. the count says how often it bit and in how many projects, and one that bit "
+    "in many holds for any task"
+)
 
 
-def hits(db, row):
-    return len(vault.incidents(index.body_of(db, row["slug"])))
+def spread(db, row):
+    """how often a rule bit and in how many projects"""
+    found = vault.incidents(index.body_of(db, row["slug"]))
+    return len(found), len({where for _, _, where in found if where not in ("", "global")})
 
 
 def ranked(db, rows):
-    """the rules that bit most often first"""
-    return sorted(rows, key=lambda r: -hits(db, r))
+    """the rules that bit in the most places first, then the ones that bit most often"""
+    return sorted(rows, key=lambda r: spread(db, r)[::-1], reverse=True)
 
 
 def in_scope(db, project):
@@ -35,8 +34,9 @@ def in_scope(db, project):
 
 
 def line(db, row):
-    n = hits(db, row)
-    return f"- {row['title']} ({n} {'time' if n == 1 else 'times'})"
+    hits, places = spread(db, row)
+    where = f" in {places} {'project' if places == 1 else 'projects'}" if places else ""
+    return f"- {row['title']} ({hits} {'time' if hits == 1 else 'times'}{where})"
 
 
 def turn_file(session, agent):
@@ -45,46 +45,24 @@ def turn_file(session, agent):
 
 
 def start_turn(session, agent):
-    """starts a fresh turn for mem-gate and returns the rules the last turn's tool calls brought up"""
+    """starts a fresh turn for mem-gate's cues"""
     path = turn_file(session, agent)
-    cued = []
-    if path.exists():
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            try:
-                cued.append(json.loads(raw)["cued"])
-            except (ValueError, KeyError, TypeError):
-                continue
     path.parent.mkdir(exist_ok=True)
     path.write_text(json.dumps({"start": int(time.time())}) + "\n", encoding="utf-8", newline="\n")
-    return cued
 
 
-def for_turn(db, project, cued, query):
-    """the rules the last turn's calls brought up, then the ones closest in meaning to the message"""
-    rows = in_scope(db, project)
-    by_slug = {r["slug"]: r for r in rows}
-    picked = [by_slug[s] for s in dict.fromkeys(cued) if s in by_slug][:FOR_TURN]
-    for r in index.by_meaning(db, rows, query)[:CLOSEST]:
-        if len(picked) < FOR_TURN and r not in picked:
-            picked.append(r)
-    return picked
-
-
-def lesson(what, by, place, rule=None, new=None, sharpen=None, why=None, check=None, when=(), scope="global"):
+def lesson(what, by, place, rule=None, new=None, sharpen=None, why=None, check=None, scope="global"):
     """logs a mistake, as an incident of an existing rule or as a new rule, and with neither says which rules are
     closest"""
     what = " ".join(what.split())
     if len(what) > WHAT_MAX:
         raise vault.Refused(f"say what went wrong in one line under {WHAT_MAX} characters, the check holds the detail")
-    when = list(when)
-    if error := triggers_error(when):
-        raise vault.Refused(error)
     db = index.connect(vec=True)
     index.index(db)
     if rule:
-        return strengthen(db, rule, incident(what, by, place), by, sharpen, check, when, place)
+        return strengthen(rule, incident(what, by, place), by, sharpen, check, place)
     if new:
-        return add(new, incident(what, by, place), why, check, when, scope)
+        return add(new, incident(what, by, place), why, check, scope)
     return closest(db, what, by, place)
 
 
@@ -92,29 +70,14 @@ def incident(what, by, place):
     return f"- {vault.today()} {by} in {place}, {what}"
 
 
-def triggers_error(when):
-    for w in when:
-        tool, _, pattern = w.partition(":")
-        if not tool or not pattern:
-            return f"{w} needs the form Tool:regex, like Bash|PowerShell:godot|harness"
-        if NOT_RE2.search(w):
-            return f"{w} uses lookaround or a backreference, which mem-gate can't run"
-        try:
-            re.compile(tool)
-            re.compile(pattern)
-        except re.error as e:
-            return f"{w} is not a valid regex, {e}"
-    return None
-
-
-def strengthen(db, slug, entry, by, sharpen, check, when, place):
+def strengthen(slug, entry, by, sharpen, check, place):
     path = vault.vault_path() / "rules" / f"{slug}.md"
     if not path.exists():
         raise vault.Refused(f"no rule {slug}, mem lesson without --rule lists the closest ones")
-    if by == "user" and not (sharpen or check or when):
+    if by == "user" and not (sharpen or check):
         raise vault.Refused(
             "the user had to point this out, so the rule didn't catch this case in time. log it in one call that also "
-            "makes the rule catch it, with --sharpen, --check or --when"
+            "makes the rule catch it, with --sharpen or --check"
         )
     note = vault.read_note(path)
     if check:
@@ -124,8 +87,6 @@ def strengthen(db, slug, entry, by, sharpen, check, when, place):
     note.body = note.body.rstrip() + "\n" + entry
     if sharpen:
         note.title = sharpen
-    added = [w for w in dict.fromkeys(when) if w not in note.when]
-    note.when += added
     note.updated = vault.today()
     # a rule that bit in a second project holds beyond its own
     moved = note.project != "global" and place != "global" and not vault.in_scope(note.project, place)
@@ -137,11 +98,10 @@ def strengthen(db, slug, entry, by, sharpen, check, when, place):
         )
         note.project = "global"
     save(note, f"lesson {slug}")
-    out += reach_lines(added, note.project)
     return "\n".join(out + [CODE_FIX])
 
 
-def add(title, entry, why, check, when, scope):
+def add(title, entry, why, check, scope):
     if not why or not check:
         raise vault.Refused("a new rule needs --why and --check")
     if len(title) > TITLE_MAX:
@@ -151,8 +111,8 @@ def add(title, entry, why, check, when, scope):
     if (vault.vault_path() / "rules" / f"{slug}.md").exists():
         raise vault.Refused(f"rule {slug} exists, strengthen it with --rule {slug}")
     body = f"why {why}\n\ncheck {check}\n\nincidents\n{entry}"
-    save(vault.Note(slug=slug, type="rules", title=title, body=body, project=scope, when=when), f"rule {slug}")
-    return "\n".join([f"added rule {slug}", *reach_lines(when, scope), CODE_FIX])
+    save(vault.Note(slug=slug, type="rules", title=title, body=body, project=scope), f"rule {slug}")
+    return "\n".join([f"added rule {slug}", CODE_FIX])
 
 
 def check_within(check, path=None):
@@ -160,51 +120,9 @@ def check_within(check, path=None):
         return check
     where = f"the check in {path.as_posix()}" if path else "it"
     raise vault.Refused(
-        f"the check would have {len(check)} characters, past {CHECK_MAX}, and every cue carries all of it. rewrite "
-        f"{where} shorter so it still catches every incident, then log the lesson again"
+        f"the check would have {len(check)} characters, past {CHECK_MAX}, and the agent reruns all of it before every "
+        f"step it covers. rewrite {where} shorter so it still catches every incident, then log the lesson again"
     )
-
-
-def recent_calls():
-    """the tool calls mem-gate logged lately, with the places each one reached"""
-    out = []
-    for name in CALLS:
-        path = vault.mem_dir() / name
-        if not path.exists():
-            continue
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            try:
-                out.append(json.loads(raw))
-            except ValueError:
-                continue
-    return out
-
-
-def reach(when, project, calls):
-    """the texts of the calls in the rule's scope that a trigger fits, and how many calls were in its scope"""
-    tool, _, pattern = when.partition(":")
-    here = [c for c in calls if any(vault.in_scope(project, p) for p in c.get("places") or [])]
-    return [c["text"] for c in here if fits(tool, pattern, c["tool"], c["text"])], len(here)
-
-
-def fits(trigger_tool, pattern, tool, text):
-    """a trigger fits a call the way mem-gate matches it, the tool part against the whole tool name"""
-    return bool(re.fullmatch(trigger_tool, tool, re.I) and re.search(pattern, text, re.I))
-
-
-def reach_lines(when, project):
-    """what each new trigger would have fit lately, so one that fires where the rule has nothing to say shows now"""
-    calls = recent_calls()
-    out = []
-    for w in when:
-        fits, total = reach(w, project, calls)
-        if not total:
-            continue
-        out.append(f"{w} fits {len(fits)} of the last {total} calls in scope" + (", like" if fits else ""))
-        out += [f"  {' '.join(text.split())[:120]}" for text in list(dict.fromkeys(reversed(fits)))[:EXAMPLES]]
-    if any(line.startswith("  ") for line in out):
-        out.append("narrow the rule's when line by hand if any of these is a call the rule has nothing to say about")
-    return out
 
 
 def with_section(body, word, text):
@@ -234,10 +152,10 @@ def closest(db, what, by, place):
         out += [f"{line(db, r)} [{r['slug']}]{where}", f"  check {check}"]
     out += [
         f'if one covers it, strengthen it with mem lesson "<what>" --by {by} --rule <slug>, and when it missed this '
-        'case add --sharpen "<title>", --check "<a sentence the check gains>" or --when "Tool:regex". one from '
-        "another project moves to global",
+        'case add --sharpen "<title>" or --check "<a sentence the check gains>". one from another project moves to '
+        "global",
         "if none does, write the general behavior behind it, not this one case, with --new \"<title>\" --why \"...\" "
-        '--check "..." --when "Tool:regex", plus --scope <project> when it only bites in that project\'s setup, its '
-        "code, design, tools or look",
+        '--check "...", plus --scope <project> when it only bites in that project\'s setup, its code, design, tools '
+        "or look",
     ]
     return "\n".join(out)

@@ -6,11 +6,15 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from . import git, index, vault
+from . import git, index, transcript, vault
 
 HOOKS = ("brief", "recall", "journal")
 SAVED = tuple(t for t in vault.TYPES if t != "rules")
 FILE = re.compile(r"[\w./-]*\w\.[A-Za-z]\w{0,7}\b")
+TRANSCRIPTS = Path.home() / ".claude" / "projects"
+SESSIONS = 10  # a week of transcripts runs past a gigabyte
+HANDBACK = ("wrap_up", "AskUserQuestion", "ExitPlanMode")
+ASIDE = ("update_plan", "mark_chapter", "ToolSearch")  # calls around the work that do none of it
 
 
 def main():
@@ -44,14 +48,13 @@ def parse(argv):
     s.add_argument("--type", choices=vault.TYPES)
     s.add_argument("-k", type=int, default=8)
     s.add_argument("--json", action="store_true")
-    sub.add_parser("show", help="print a note").add_argument("slug")
+    sub.add_parser("show", help="print notes by slug or title").add_argument("names", nargs="+")
     s = sub.add_parser("save", help="write a note, body from stdin or --body")
     s.add_argument("--type", required=True, choices=SAVED)
     s.add_argument("--title", required=True)
     s.add_argument("--tags", nargs="*", default=[])
     s.add_argument("--links", nargs="*", default=[])
     s.add_argument("--project", default="global", help="a git root for that project's code, design, findings, tools and run recipes")
-    s.add_argument("--when", nargs="*", default=[], help="Tool:regex triggers for the calls where the note matters")
     s.add_argument("--body")
     s = sub.add_parser("lesson", help="log a mistake, first alone to see the closest rules, then with --rule or --new")
     s.add_argument("what", help="what went wrong, in one line")
@@ -61,7 +64,6 @@ def parse(argv):
     s.add_argument("--sharpen", metavar="TITLE", help="a sharper title for the --rule")
     s.add_argument("--why")
     s.add_argument("--check", help="what to run or look at that catches it, added to an existing rule's check")
-    s.add_argument("--when", nargs="*", default=[], help="Tool:regex triggers for mem-gate, like Bash|PowerShell:godot")
     s.add_argument("--scope", default="global", help="the project a new rule holds in, global by default")
     sub.add_parser("done", help="mark a leftover done").add_argument("slug")
     sub.add_parser("forget", help="delete a note").add_argument("slug")
@@ -114,17 +116,15 @@ def run(args):
                 hits, maybe = index.list_notes(db, args.project, (args.type,) if args.type else None, args.k), []
             print(json.dumps(search_json(db, hits, maybe)) if args.json else render_search(db, hits, maybe))
         case "show":
-            note = vault.find(args.slug)
-            print(note.path.as_posix())
-            print(note.path.read_text(encoding="utf-8"))
+            print(show(args.names))
         case "save":
             body = args.body if args.body is not None else sys.stdin.read()
-            print(saved(save_note(args.type, args.title, body, args.tags, args.links, args.project, args.when)))
+            print(saved(save_note(args.type, args.title, body, args.tags, args.links, args.project)))
         case "lesson":
             from . import rules
 
             place = vault.project_of(os.getcwd())
-            print(rules.lesson(args.what, args.by, place, args.rule, args.new, args.sharpen, args.why, args.check, args.when, args.scope))
+            print(rules.lesson(args.what, args.by, place, args.rule, args.new, args.sharpen, args.why, args.check, args.scope))
         case "done":
             set_done(args.slug)
             print(f"done {args.slug}")
@@ -149,13 +149,22 @@ def run(args):
             serve()
 
 
-def save_note(type, title, body, tags, links, project, when=()):
-    from . import rules
+def show(names):
+    """the full notes the slugs or titles name, each under its slug and path"""
+    db = index.connect()
+    index.index(db)
+    out = []
+    for name in names:
+        row = index.named(db, name)
+        if not row:
+            raise vault.Refused(f"no note named {name}, memory_search finds notes by meaning")
+        out.append(f"# {row['slug']} at {row['path']}\n{Path(row['path']).read_text(encoding='utf-8')}")
+    return "\n\n".join(out)
 
+
+def save_note(type, title, body, tags, links, project):
     if type not in SAVED:
         raise vault.Refused(f"type must be one of {', '.join(SAVED)}, rules change through mem lesson")
-    if error := rules.triggers_error(when):
-        raise vault.Refused(error)
     slug = vault.slugify(title)
     if links:
         body = body.rstrip() + "\n\nrelated " + " ".join(f"[[{l}]]" for l in links)
@@ -166,14 +175,11 @@ def save_note(type, title, body, tags, links, project, when=()):
             f"the body has {len(body)} characters, a note stays under {vault.BODY_MAX} so a hook can carry it next to "
             "others. keep only what a later task needs, or split it by subject"
         )
-    note = vault.Note(slug=slug, type=type, title=title, body=body, project=project, tags=list(tags), when=list(when))
+    note = vault.Note(slug=slug, type=type, title=title, body=body, project=project, tags=list(tags))
     # a save under another type moves the note, since the index holds one note per slug
     old = [p for t in vault.TYPES if (p := vault.vault_path() / t / f"{slug}.md").exists()]
     if old:
-        before = vault.read_note(old[0])
-        note.created = before.created
-        # a save that only rewrites the body keeps what brings the note back
-        note.when = note.when or before.when
+        note.created = vault.read_note(old[0]).created
     for path in old:
         path.unlink()
     vault.write_note(note)
@@ -183,10 +189,7 @@ def save_note(type, title, body, tags, links, project, when=()):
 
 
 def saved(note):
-    """where the note went and what its triggers would have fit lately"""
-    from . import rules
-
-    return "\n".join([f"saved {note.slug} at {note.path.as_posix()}", *rules.reach_lines(note.when, note.project)])
+    return f"saved {note.slug} at {note.path.as_posix()}"
 
 
 def set_done(slug):
@@ -221,7 +224,7 @@ def render_search(db, hits, maybe):
 
     out = [block(db, r) for r in hits] or ["no hits"]
     if maybe:
-        out.append("maybe relevant, open with mem show <slug>")
+        out.append("maybe relevant, open with memory_show")
         out += [line(r) for r in maybe]
     return "\n\n".join(out)
 
@@ -244,24 +247,49 @@ def check_report():
         "reindexed": len(changed),
         "removed": len(gone),
         "health": health,
-        "triggers": trigger_reach(),
+        "sessions": [session_report(db, p) for p in latest_sessions()],
         "behind": behind_code(),
         "dead_labels": dead_labels(),
         "log_tail": log.read_text(encoding="utf-8").splitlines()[-10:] if log.exists() else [],
     }
 
 
-def trigger_reach():
-    """each trigger with the recent calls in its note's scope it fits, the ones fitting most first"""
-    from . import rules
+def latest_sessions():
+    return sorted(TRANSCRIPTS.glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:SESSIONS]
 
-    calls = rules.recent_calls()
-    out = []
-    for t in index.triggers():
-        when = f"{t['tool']}:{t['pattern']}"
-        fits, total = rules.reach(when, t["project"], calls)
-        out.append({"slug": t["slug"], "when": when, "fits": len(fits), "total": total, "like": list(dict.fromkeys(fits))[:2]})
-    return sorted(out, key=lambda t: -t["fits"] / max(t["total"], 1))
+
+def session_report(db, path):
+    """how many turns opened memory before their first work call, and how many hand backs, a wrap_up, a question
+    or a plan, had a rule opened after the last work call before them"""
+    is_rule = {}
+
+    def opens_rule(call):
+        for name in transcript.shown(*call):
+            if name not in is_rule:
+                row = index.named(db, name)
+                is_rule[name] = bool(row) and row["type"] == "rules"
+            if is_rule[name]:
+                return True
+        return False
+
+    def aside(call):
+        return call[0].endswith(HANDBACK + ASIDE) or transcript.reads_memory(*call)
+
+    worked = started = backs = checked = 0
+    for calls in transcript.turns(path):
+        work = [i for i, call in enumerate(calls) if not aside(call)]
+        if not work:
+            continue
+        worked += 1
+        started += any(transcript.reads_memory(*call) for call in calls[: work[0]])
+        last = -1
+        for i, call in enumerate(calls):
+            if call[0].endswith(HANDBACK):
+                backs += 1
+                checked += any(map(opens_rule, calls[last + 1 : i]))
+            elif not aside(call):
+                last = i
+    return {"session": path.stem, "folder": path.parent.name, "turns": worked, "started": started, "handbacks": backs, "checked": checked}
 
 
 def behind_code():
@@ -325,11 +353,16 @@ def render_check(r):
         out.append("dead links " + ", ".join(f"{s} -> {link}" for s, link in h["dead_links"]))
     if h["long_bodies"]:
         out.append("bodies over the cap " + ", ".join(h["long_bodies"]))
-    if r["triggers"]:
-        out.append("triggers by the share of recent calls in scope they fit, each should fit only calls its note speaks to")
-        for t in r["triggers"]:
-            out.append(f"{t['fits']}/{t['total']} {t['slug']} {t['when']}")
-            out += [f"  {' '.join(text.split())[:100]}" for text in t["like"]]
+    if r["sessions"]:
+        out.append(
+            "latest sessions, the turns that opened memory before their first work call and the hand backs with a rule "
+            "opened after the last work call. a miss is a turn or a hand back the way of working in system/working.md "
+            "didn't reach"
+        )
+        out += [
+            f"{s['folder']} {s['session'][:8]} started {s['started']}/{s['turns']}, rules before hand back {s['checked']}/{s['handbacks']}"
+            for s in r["sessions"]
+        ]
     if r["behind"]:
         out.append("notes naming files a commit changed after the note, check what each says against them")
         out += [f"{b['slug']} {', '.join(b['files'])}" for b in r["behind"]]
@@ -346,17 +379,30 @@ def pane(session, cwd):
     health = index.health(db, project)
     leftovers = index.list_notes(db, project, ("leftovers",), k=50)
     injected = index.injected_rows(db, session)
+    opened = opened_rows(db, session)
     return {
         "project": project,
         "vault": vault.vault_path().as_posix(),
         "health": {k: v for k, v in health.items() if not isinstance(v, list)},
         "leftovers": [row_json(db, r) | {"age_days": index.days_ago(r["created"])} for r in leftovers],
+        "opened": [row_json(db, r) for r in opened],
         "injected": [
             {"slug": r["slug"], "title": r["title"], "path": r["path"], "source": r["source"], "at": r["at"]} for r in injected
         ],
         "counts": {
             "notes": db.execute("select count(*) from notes where status='active'").fetchone()[0],
             "open": len(leftovers),
+            "opened": len(opened),
             "recalled": len({r["slug"] for r in injected}),
         },
     }
+
+
+def opened_rows(db, session):
+    """the notes the agent opened this session, newest first"""
+    path = next(TRANSCRIPTS.glob(f"*/{session}.jsonl"), None)
+    rows = {}
+    for name in reversed(transcript.opened(path)):
+        if row := index.named(db, name):
+            rows.setdefault(row["slug"], row)
+    return list(rows.values())

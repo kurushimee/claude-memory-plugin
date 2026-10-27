@@ -13,9 +13,9 @@ EXTENSION = "local.mcpb.kurushimee.memory"
 mcp = MCPServer(
     "memory",
     instructions=(
-        "claude's own memory vault. call memory_brief at the start of any work or project talk, "
-        "memory_search when entering an area, hitting an error, making a design call or when the user "
-        "refers to something from before, memory_save the moment something worth keeping comes up"
+        "claude's own memory vault, its rules grew out of the user's corrections. where no index of it came in by "
+        "itself, call memory_brief for one at the start of any work. open what the task touches with memory_show, "
+        "search with memory_search, save with memory_save the moment something worth keeping comes up"
     ),
 )
 
@@ -36,15 +36,13 @@ def tool(fn):
 
 @tool
 def memory_brief(project: str | None = None) -> str:
-    """the brief for a project, the rules on how to work, open leftovers, project notes and health. with no project it lists the known projects and the global brief"""
+    """the index of memory for a project, how to use it and every rule and note title in scope. with no project it lists the known projects and the global index"""
     db = index.connect(vec=True)
     index.index(db)
-    if project is None:
-        projects = [r[0] for r in db.execute("select distinct project from notes where project!='global' order by project")]
-        text = hooks.brief_text(db, "global")[0]
-        return "known projects: " + (", ".join(projects) or "none yet") + "\n\n" + text
-    text = hooks.brief_text(db, project)[0]
-    return text
+    if project is not None:
+        return hooks.brief_text(db, project)
+    projects = [r[0] for r in db.execute("select distinct project from notes where project!='global' order by project")]
+    return "known projects: " + (", ".join(projects) or "none yet") + "\n\n" + hooks.brief_text(db, "global")
 
 
 @tool
@@ -57,10 +55,9 @@ def memory_search(query: str, project: str | None = None, type: str | None = Non
 
 
 @tool
-def memory_show(slug: str) -> str:
-    """the full note for a slug"""
-    note = vault.find(slug)
-    return note.path.read_text(encoding="utf-8")
+def memory_show(names: list[str]) -> str:
+    """the full notes, each named by its title as the index lists it or by its slug. open every one the task needs in one call"""
+    return cli.show(names)
 
 
 @tool
@@ -71,10 +68,9 @@ def memory_save(
     tags: list[str] | None = None,
     links: list[str] | None = None,
     project: str | None = None,
-    when: list[str] | None = None,
 ) -> str:
-    """save one memory. type is facts, projects or leftovers, mistakes go through memory_lesson. take out the project's names and the case's own details, its harness, setup, measurements and fix, and what's left goes global in those general words when it still changes how work goes across many kinds of tasks, a behavior, how the user wants stuff, how a tool behaves anywhere or a fact about the machine. project is a git root for the rest, that project's code, files, design, state, decisions, findings, tools and recipes for its runs, even when the note never names it, and a finding with both parts gets split into a global note and a project note linking to it. when is Tool:regex triggers for the calls where the note matters, which bring it in at those calls in any project. an existing slug gets its body replaced and keeps its triggers unless new ones are given. the title is the claim itself. the body holds what holds now and why, under 3000 characters, with no history or session narration and nothing the repo's docs, the code or a rule already say"""
-    return cli.saved(cli.save_note(type, title, body, tags or [], links or [], project or "global", when or []))
+    """save one memory. type is facts, projects or leftovers, mistakes go through memory_lesson. take out the project's names and the case's own details, its harness, setup, measurements and fix, and what's left goes global in those general words when it still changes how work goes across many kinds of tasks, a behavior, how the user wants stuff, how a tool behaves anywhere or a fact about the machine. project is a git root for the rest, that project's code, files, design, state, decisions, findings, tools and recipes for its runs, even when the note never names it, and a finding with both parts gets split into a global note and a project note linking to it. an existing slug gets its body replaced. the title is the claim itself, since the index shows only titles and a title is what decides whether the note gets opened. the body holds what holds now and why, under 3000 characters, with no history or session narration and nothing the repo's docs, the code or a rule already say"""
+    return cli.saved(cli.save_note(type, title, body, tags or [], links or [], project or "global"))
 
 
 @tool
@@ -87,13 +83,12 @@ def memory_lesson(
     sharpen: str | None = None,
     why: str | None = None,
     check: str | None = None,
-    when: list[str] | None = None,
     scope: str = "global",
 ) -> str:
-    """log a mistake. what is one line. by is self when you spotted it, user when the user had to. project is the git root where it happened, or global when it happened outside any project. call it first with only what, by and project to see the closest rules from every project, then again with rule set to the slug it is another incident of, adding sharpen, check (a sentence the rule's check gains) or when if the rule missed this case, which a user lesson always needs. a rule from another project moves to global when strengthened from here. or call it with new set to the title of a new general rule plus why, check, when (Tool:regex triggers) and scope, global for a behavior that matters in any project, or a git root when the rule only bites in that project's setup, its code, design, tools or look, until it bites in a second project"""
+    """log a mistake. what is one line. by is self when you spotted it, user when the user had to. project is the git root where it happened, or global when it happened outside any project. call it first with only what, by and project to see the closest rules from every project, then again with rule set to the slug it is another incident of, adding sharpen or check (a sentence the rule's check gains) if the rule missed this case, which a user lesson always needs. a rule from another project moves to global when strengthened from here. or call it with new set to the title of a new general rule plus why, check and scope, global for a behavior that matters in any project, or a git root when the rule only bites in that project's setup, its code, design, tools or look, until it bites in a second project"""
     from . import rules
 
-    return rules.lesson(what, by, project, rule, new, sharpen, why, check, when or [], scope)
+    return rules.lesson(what, by, project, rule, new, sharpen, why, check, scope)
 
 
 @tool

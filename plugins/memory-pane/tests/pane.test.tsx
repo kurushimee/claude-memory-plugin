@@ -19,8 +19,9 @@ const paneJson = {
   vault: 'F:/claude-memory',
   health: { line: '3 open, 1 older than 30d, 0 dupes, 2 stale, 0 conflicts, 0 errors, last pass 3d ago', open: 3, open_old: 1, dupes: 0, stale: 2, conflicts: 0, errors: 0, unpushed: 0, days_since_pass: 3, lessons_week: 4, lessons_by_user: 1, lessons_repeats: 2 },
   leftovers: [{ slug: 'finish-cascade-probe-debug', title: 'finish the cascade probe debug view', path: 'F:/claude-memory/leftovers/finish-cascade-probe-debug.md', project: 'F:/radiance-cascades', age_days: 4 }],
-  injected: [{ slug: 'godot-runs-must-end-themselves', title: 'godot runs must end themselves', path: 'F:/claude-memory/facts/godot-runs-must-end-themselves.md', source: 'tool', at: '2026-10-22T12:00:00' }],
-  counts: { notes: 40, open: 3, recalled: 2 },
+  opened: [{ slug: 'keep-going', title: 'keep going until it is done', path: 'F:/claude-memory/rules/keep-going.md', type: 'rules', project: 'global' }],
+  injected: [{ slug: 'godot-runs-must-end-themselves', title: 'godot runs must end themselves', path: 'F:/claude-memory/facts/godot-runs-must-end-themselves.md', source: 'prompt', at: '2026-10-22T12:00:00' }],
+  counts: { notes: 40, open: 3, opened: 1, recalled: 2 },
 }
 
 const searchJson = {
@@ -55,6 +56,7 @@ test('the pane lists notes, marks a leftover done and searches, on terminal and 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ type: 'Button', text: /finish the cascade probe debug view/ })).toBeDefined()
+    expect(await ui.find({ type: 'Button', text: /keep going until it is done/ })).toBeDefined()
     expect(await ui.find({ type: 'Button', text: /godot runs must end themselves/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /4 lessons this week, 1 spotted by the user, 2 repeats, last cleanup 3d ago/ })).toBeDefined()
 

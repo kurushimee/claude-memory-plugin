@@ -30,7 +30,7 @@ async function refresh($: EngineInterface) {
   const pane = await memJson<PaneData>($, 'pane', '--json', '--session', id, '--cwd', cwd)
   if (pane === undefined) return markUnavailable($)
 
-  $.ui.status(`mem: ${pane.counts.open} open, ${pane.counts.recalled} recalled`)
+  $.ui.status(`mem: ${pane.counts.open} open, ${pane.counts.opened} opened`)
   await update($, view, v => ({ ...v, pane, isUnavailable: false }))
 }
 
@@ -180,7 +180,7 @@ export const register: Register = on => {
               </Text>
             )}
             <Text size="footnote" dimColor>
-              {`${count(pane.counts.notes, 'note')}, ${pane.counts.open} open, ${pane.counts.recalled} recalled`}
+              {`${count(pane.counts.notes, 'note')}, ${pane.counts.open} open, ${pane.counts.opened} opened, ${pane.counts.recalled} recalled`}
             </Text>
           </Box>
         )}
@@ -222,7 +222,13 @@ export const register: Register = on => {
         )}
         {pane && (
           <Box flexDirection="column" gap="xs">
-            {label('remembered this session', pane.injected.length === 0)}
+            {label('opened this session', pane.opened.length === 0)}
+            {pane.opened.map(note => row('opened', note, note.type ?? ''))}
+          </Box>
+        )}
+        {pane && (
+          <Box flexDirection="column" gap="xs">
+            {label('came in by itself', pane.injected.length === 0)}
             {newestFirst(pane.injected).map(note => row('injected', note, note.source))}
           </Box>
         )}

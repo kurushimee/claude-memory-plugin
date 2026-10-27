@@ -6,16 +6,17 @@ from . import attempts, git, index, judge, rules, transcript, vault
 # what is left under it covers the few short headers taken without asking the room
 CAP = 9500
 TOOL_KEYS = ("file_path", "path", "pattern", "command", "glob", "notebook_path")
-TITLES = 30
 SQUASH = 3000
 SAID = 400
 EVENTS = ("<task-notification>", "<agent-message ", "<cross-session-message ", "<side-sessions-event>")
 REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.S)
 POINTER = (
-    "the memory skill holds the policy, load it when in doubt. save with memory_save or mem save, "
-    "search with memory_search or mem search, open a note with memory_show or mem show <slug>, "
-    "log a mistake with memory_lesson or mem lesson"
+    "open notes with memory_show or mem show, several titles at once, search with memory_search or mem search, save "
+    "with memory_save or mem save and log a mistake with memory_lesson or mem lesson. the memory skill holds the "
+    "policy for saving and lessons"
 )
+MORE = "and {} more with no room here, memory_search finds them"
+MISSED = "last week the user had to point out {} mistakes that a rule in memory already covered"
 LESSON = (
     "if this message points out something you did wrong, first log it with mem lesson --by user as the general "
     "behavior behind it, then go on"
@@ -23,10 +24,6 @@ LESSON = (
 TAKEN = (
     "no notes came by meaning with this message, a game or another program holds the gpu memory the judge needs, so "
     "search memory yourself if this message needs notes"
-)
-RULES_LEFT = (
-    "and {} more rules with no room here. they still come back at the calls their triggers fit, and a cleanup pass "
-    "merges rules until all fit"
 )
 ASKED = (
     "asked before in this project. if this is the same question, stop this agent with TaskStop and use what came "
@@ -59,94 +56,60 @@ class Room:
         return text
 
 
-def listing(room, head, lines, budget=CAP):
-    """the head and as many lines as fit in the budget and the room"""
+def listing(room, head, lines, budget=CAP, more=""):
+    """the head and as many lines as fit in the budget and the room as one block, and when more is given, how many
+    had no room"""
     if not lines or not room.fits(head):
         return []
     out, start = [head], room.left
-    for text in lines:
+    for i, text in enumerate(lines):
         if start - room.left + len(text) > budget or not room.fits(text):
+            if more:
+                out.append(room.take(more.format(len(lines) - i)))
             break
         out.append(text)
-    return out
+    return ["\n".join(out)]
 
 
 def line(row):
-    return f"- {row['title']} ({row['slug']})"
+    open_for = f", open for {index.days_ago(row['created'])}d" if row["type"] == "leftovers" else ""
+    return f"- {row['title']}{open_for}"
 
 
-def block(db, row, extra=""):
+def block(db, row):
     tags = f" [{row['tags']}]" if row["tags"] else ""
-    return f"## {row['title']} ({row['slug']}){tags}\n{index.body_of(db, row['slug'])}{extra}"
+    return f"## {row['title']} ({row['slug']}){tags}\n{index.body_of(db, row['slug'])}"
 
 
-def age(row):
-    return f"\nopen for {index.days_ago(row['created'])}d" if row["type"] == "leftovers" else ""
-
-
-def section(db, rows, room):
-    """bodies while they fit, then titles while they fit, then how many are left"""
-    out, shown = [], []
-    for i, r in enumerate(rows):
-        if len(out) == len(shown) and room.fits(b := block(db, r, age(r))):
-            out.append(b)
-            shown.append(r["slug"])
-        elif room.fits(t := line(r)):
-            out.append(t)
-        else:
-            out.append(room.take(f"and {len(rows) - i} more, mem search finds them"))
-            break
-    return out, shown
-
-
-def belongs(row, project):
-    """the brief carries only what fits any task here, the project's own notes and notes tagged always"""
-    if "always" in (row["tags"] or "").split() or row["project"] != "global":
-        return True
-    return project == "global" and row["type"] == "leftovers"
-
-
-GROUPS = (
-    ("open leftovers", ("leftovers",)),
-    ("notes, the rest as titles, open with mem show <slug>", ("facts", "projects")),
-)
-
-
-def rule_lines(db, rows, room):
-    """the rules in scope one line each while they fit, the ones that bit most first, then how many had no room"""
-    if not rows:
-        return []
-    out = [room.take(rules.HEADER)]
-    ranked = rules.ranked(db, rows)
-    for i, r in enumerate(ranked):
-        if not room.fits(text := rules.line(db, r)):
-            out.append(room.take(RULES_LEFT.format(len(ranked) - i)))
-            break
-        out.append(text)
+def working(db):
+    """how to use memory, a vault file so a cleanup pass can sharpen it from the misses mem check reports"""
+    path = vault.vault_path() / "system" / "working.md"
+    out = [path.read_text(encoding="utf-8").strip()] if path.exists() else []
+    if missed := index.lessons_week(db)["lessons_missed"]:
+        out.append(MISSED.format(missed))
     return out
 
 
-def sections(db, rows, room):
-    out, shown = [], []
-    for header, types in GROUPS:
-        part = [r for r in rows if r["type"] in types][:40]
-        if part and room.fits(header):
-            blocks, slugs = section(db, part, room)
-            out += [header, *blocks]
-            shown += slugs
-    return out, shown
+def groups(project, rows):
+    notes = [r for r in rows if r["type"] in ("facts", "projects")]
+    return [
+        ("open leftovers", [r for r in rows if r["type"] == "leftovers"]),
+        (f"notes for {project}", [r for r in notes if r["project"] != "global"]),
+        ("global notes", [r for r in notes if r["project"] == "global"]),
+    ]
 
 
 def squashed(db, project, session, agent, transcript_path, room):
-    """what the squash summary may have dropped, the notes reminded of before it, what subagents already brought back
-    and the user's own words"""
-    before = safe(index.before_compaction, db, session, agent, default=[])
+    """what the squash summary may have dropped, the notes opened or brought before it, what subagents already brought
+    back and the user's own words"""
+    brought = [title for _, title in safe(index.before_compaction, db, session, agent, default=[])]
+    opened = [] if agent else [r["title"] for n in transcript.opened(transcript_path) if (r := index.named(db, n))]
     asked = safe(attempts.of_session, project, session, default=[])
     said = [] if agent else transcript.user_messages(transcript_path)
     safe(index.stamp_compacted, db, session, agent)
     return [
-        *listing(room, "reminded of these before the squash, the summary may have dropped them, re-read what matters",
-                 [f"- {title} ({slug})" for slug, title in before], SQUASH),
+        *listing(room, "opened or brought before the squash, the summary may have dropped what they said, open again "
+                 "what the work still needs", [f"- {t}" for t in dict.fromkeys(opened + brought)], SQUASH),
         *listing(room, "asked of subagents this session, check what came back before asking again",
                  [attempts.line(e, 300) for e in reversed(asked)], SQUASH),
         *listing(room, "the user's own words this session, newest first, the summary may have reworded them",
@@ -155,22 +118,22 @@ def squashed(db, project, session, agent, transcript_path, room):
 
 
 def brief_text(db, project, session="", agent="", source="startup", is_sub=False, transcript_path=""):
-    seen = safe(index.injected_slugs, db, session, agent, default=set()) if source == "resume" else set()
-    in_scope = [r for r in safe(index.list_notes, db, project, None, 500, default=[]) if r["slug"] not in seen]
-    notes = [r for r in in_scope if r["type"] != "rules"]
-    head = f"memory brief for {project}"
+    """the index, how to use memory and every rule and note title in scope, with no bodies, since a body pushed in
+    that the task doesn't need teaches the agent that memory comes to it"""
+    rows = safe(index.list_notes, db, project, None, 500, default=[])
+    head = f"memory index for {project}"
     tail = [POINTER]
     if not is_sub and (health := safe(index.health, db, project)):
         tail.insert(0, "health: " + health["line"])
     room = Room(CAP - sum(len(t) + 2 for t in [head, *tail]))
-    rule_part = rule_lines(db, [r for r in in_scope if r["type"] == "rules"], room)
-    squash = squashed(db, project, session, agent, transcript_path, room) if source == "compact" and session else []
-    blocks, shown = sections(db, [r for r in notes if belongs(r, project)], room)
-    others = [r for r in notes if not belongs(r, project)][:TITLES]
-    titles = listing(room, "other notes here, titles only, open one with mem show <slug> when it fits the task", [line(r) for r in others])
-    listed = [r["slug"] for r in others[: max(0, len(titles) - 1)]]
-    text = "\n\n".join([head, *rule_part, *blocks, *titles, *squash, *tail])
-    return text, shown, listed
+    out = [head, *(room.take(t) for t in safe(working, db, default=[]))]
+    ranked = rules.ranked(db, [r for r in rows if r["type"] == "rules"])
+    out += listing(room, rules.HEADER, [rules.line(db, r) for r in ranked], more=MORE)
+    for title, part in groups(project, rows):
+        out += listing(room, title, [line(r) for r in part], more=MORE)
+    if source == "compact" and session:
+        out += squashed(db, project, session, agent, transcript_path, room)
+    return "\n\n".join([*out, *tail])
 
 
 def brief(payload):
@@ -191,9 +154,7 @@ def brief(payload):
     if not is_sub:
         for path in safe(git.edited, default=[]):
             safe(git.commit, [path], f"edit {path.stem}")
-    text, shown, listed = brief_text(db, project, session, agent, source, is_sub, payload.get("transcript_path", ""))
-    safe(index.record_injected, db, session, agent, shown, "brief")
-    safe(index.record_injected, db, session, agent, listed, index.MENTION)
+    text = brief_text(db, project, session, agent, source, is_sub, payload.get("transcript_path", ""))
     return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}
 
 
@@ -214,64 +175,33 @@ def places_in(project, text):
     return {vault.project_of(p) for p in vault.paths_in(text)} - {project, "global"}
 
 
-def entered(db, project, places, seen, reached):
-    """notes of the places that the session's own brief did not carry and no earlier call brought, and the
-    folders those notes belong to"""
+def entered(db, project, places, reached):
+    """notes of the places that the session's own index did not name and no earlier call brought, and the folders
+    those notes belong to"""
     rows, scopes = {}, set()
     for place in places:
         for r in index.list_notes(db, place, None, 500):
             if r["project"] in reached or r["project"] == "global" or vault.in_scope(r["project"], project):
                 continue
             scopes.add(r["project"])
-            if r["slug"] not in seen:
-                rows[r["slug"]] = r
+            rows[r["slug"]] = r
     return list(rows.values()), scopes
 
 
-def entry(db, session, agent, project, places, source, room):
+def entry(db, session, agent, project, places, room):
     try:
         db.execute("begin immediate")
-        rows, scopes = entered(db, project, places, index.injected_slugs(db, session, agent), index.reached(session, agent))
+        rows, scopes = entered(db, project, places, index.reached(session, agent))
         index.record_reached(session, agent, scopes)
-        if not rows:
-            return []
-        names = ", ".join(sorted({r["project"] for r in rows}))
-        head = room.take(f"memory for {names}, this session just reached it")
-        rule_part = rule_lines(db, [r for r in rows if r["type"] == "rules"], room)
-        blocks, shown = sections(db, [r for r in rows if r["type"] != "rules"], room)
-        index.record_injected(db, session, agent, shown, source)
     finally:
         db.commit()
-    return [head, *rule_part, *blocks]
-
-
-def subjects(tool, text, project):
-    """the notes other than rules whose trigger fits the call, where their scope reaches the session's folder or one
-    the call leads into"""
-    places = {project, *map(vault.project_of, vault.paths_in(text))}
-    return list(dict.fromkeys(
-        t["slug"] for t in index.triggers()
-        if t["type"] != "rules" and any(vault.in_scope(t["project"], p) for p in places)
-        and rules.fits(t["tool"], t["pattern"], tool, text)
-    ))
-
-
-def brought(db, session, agent, slugs, room):
-    """the notes a call is about that this session lacks. every one goes in the reached record, brought or already
-    here, so mem-gate stops handing the call over for them"""
-    try:
-        db.execute("begin immediate")
-        seen = index.injected_slugs(db, session, agent)
-        rows = [r for s in slugs if s not in seen and (r := index.note_row(db, s))]
-        index.record_reached(session, agent, slugs)
-        if not rows:
-            return []
-        head = room.take("memory this call is about")
-        blocks, shown = section(db, rows, room)
-        index.record_injected(db, session, agent, shown, "tool")
-    finally:
-        db.commit()
-    return [head, *blocks]
+    if not rows:
+        return []
+    names = ", ".join(sorted({r["project"] for r in rows}))
+    head = f"memory for {names}, this session just reached it. open what the work there needs with memory_show"
+    ranked = rules.ranked(db, [r for r in rows if r["type"] == "rules"])
+    lines = [rules.line(db, r) for r in ranked] + [line(r) for r in rows if r["type"] != "rules"]
+    return listing(room, head, lines, more=MORE)
 
 
 def doc_of(db, row):
@@ -283,9 +213,8 @@ def query_of(prompt, reply):
 
 
 def judged(db, session, agent, project, query, room):
-    """the notes in scope whose body this session lacks, judged against the prompt. a body needs a strict
-    score, a title a loose one, since a title that misses costs one line. rules come in through their own lines,
-    since they are about how to work, not about the subject of a message"""
+    """the notes in scope whose body this session lacks and that the judge finds the message is about. rules aren't
+    judged, they're about how to work and not about the subject of a message"""
     seen = index.injected_slugs(db, session, agent)
     rows = [r for r in index.list_notes(db, project, None, 500) if r["type"] != "rules" and r["slug"] not in seen]
     if not rows:
@@ -296,21 +225,13 @@ def judged(db, session, agent, project, query, room):
         scores = judge.scores(query, [doc_of(db, r) for r in rows])
     except judge.Taken:
         return [room.take(TAKEN)]
-    if not scores:
+    ranked = sorted(zip(scores or [], rows), key=lambda pair: pair[0], reverse=True)
+    picked = [r for s, r in ranked if s >= judge.BODY_GATE][:3]
+    bodies = {r["slug"]: b for r in picked if room.fits(b := block(db, r))}
+    if not bodies:
         return []
-    ranked = sorted(zip(scores, rows), key=lambda pair: pair[0], reverse=True)
-    mentioned = index.mentioned_slugs(db, session, agent)
-    bodies, titles = [], []
-    for r in [r for s, r in ranked if s >= judge.BODY_GATE][:3]:
-        (bodies if room.fits(block(db, r)) else titles).append(r)
-    titles += [r for s, r in ranked if judge.TITLE_GATE <= s < judge.BODY_GATE and r["slug"] not in mentioned][:5]
-    titles = [r for r in titles if room.fits(line(r))]
-    index.record_injected(db, session, agent, [r["slug"] for r in bodies], "prompt")
-    index.record_injected(db, session, agent, [r["slug"] for r in titles], index.MENTION)
-    out = [room.take("memory that fits this message"), *(block(db, r) for r in bodies)] if bodies else []
-    if titles:
-        out += [room.take("maybe related, titles only, open one with mem show <slug> if it fits"), *map(line, titles)]
-    return out
+    index.record_injected(db, session, agent, list(bodies), "prompt")
+    return [room.take("memory that fits this message"), *bodies.values()]
 
 
 def stop_line(transcript_path):
@@ -324,22 +245,13 @@ def stop_line(transcript_path):
     )
 
 
-def turn_lines(db, project, cued, query, transcript_path, room):
-    out = [room.take(t) for t in (stop_line(transcript_path), LESSON) if t]
-    picked = rules.for_turn(db, project, cued, query)
-    if picked:
-        out += [room.take("rules for this turn, from the last turn's calls and this message"), *(room.take(rules.line(db, r)) for r in picked)]
-    return out
-
-
 def recall(payload):
-    """a folder's notes come in the first time the session reaches it, a note comes in the first time a call fits its
-    trigger, and a prompt also gets the rules for the turn and the notes in scope judged by meaning"""
+    """a prompt gets the notes in scope its message is about, judged by meaning, and a call that reaches another
+    folder for the first time gets the titles of that folder's notes"""
     event = payload.get("hook_event_name", "")
     session = payload.get("session_id", "")
     agent = payload.get("agent_id") or ""
     project = vault.project_of(payload.get("cwd", ""))
-    about = []
     if event == "UserPromptSubmit":
         # the app puts its reminders, recent project folders among them, in front of what the user wrote
         source, text = "prompt", REMINDER.sub("", payload.get("prompt", "")).strip()
@@ -347,12 +259,11 @@ def recall(payload):
         source, text = "tool", tool_text(payload.get("tool_name", ""), payload.get("tool_input") or {})
         if touches_memory(text):
             return None
-        about = subjects(payload.get("tool_name", ""), text, project)
     # background task events and messages from subagents or other sessions arrive as prompts too, often, and carry
     # paths out of reports, so they bring neither folders nor the model
     typed = source == "prompt" and bool(text) and not text.lstrip().startswith(EVENTS)
     places = places_in(project, text) if source == "tool" or typed else set()
-    if source == "tool" and not places and not about:
+    if source == "tool" and not places:
         return None
     db = index.connect(vec=source == "prompt")
     room = Room()
@@ -360,16 +271,14 @@ def recall(payload):
     if source == "prompt":
         safe(index.index, db)
         db.commit()
-        cued = safe(rules.start_turn, session, agent, default=[])
+        safe(rules.start_turn, session, agent)
     if typed:
         path = payload.get("transcript_path")
-        query = query_of(text, transcript.last_reply(path))
-        out += safe(turn_lines, db, project, cued, query, path, room, default=[])
+        out += [room.take(t) for t in (safe(stop_line, path, default=""), LESSON) if t]
     if places:
-        out += entry(db, session, agent, project, places, source, room)
-    if about:
-        out += brought(db, session, agent, about, room)
+        out += entry(db, session, agent, project, places, room)
     if typed:
+        query = query_of(text, transcript.last_reply(path))
         out += safe(judged, db, session, agent, project, query, room, default=[])
     if not out:
         return None

@@ -17,7 +17,6 @@ LLAMA = Path.home() / ".cache" / "mem" / "llama"
 SERVER = LLAMA / "bin" / "llama-server.exe"
 MODEL = LLAMA / "qwen3-reranker-4b-q4_k_m.gguf"
 BODY_GATE = 0.45
-TITLE_GATE = 0.1
 DEADLINE = 25
 CHUNK = 4
 NEED = 3800  # MiB of free VRAM, the judge peaked at 3706 on the 2070

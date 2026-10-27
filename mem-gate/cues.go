@@ -17,7 +17,6 @@ import (
 const (
 	editsEvery     = 5
 	transcriptTail = 64 << 10
-	callsMax       = 1 << 20
 	bodyMax        = 3000 // vault.BODY_MAX
 	failedCue      = "this call failed. if the cause was your own slip and not the environment, fix it, then log the general behavior behind it with mem lesson --by self"
 	repeatCue      = "this exact call already failed earlier this turn. stop retrying and find the cause first"
@@ -32,20 +31,9 @@ var (
 	frontMatter = regexp.MustCompile(`(?s)\A---\n.*?\n---\n?`)
 )
 
-type trigger struct {
-	Slug    string `json:"slug"`
-	Type    string `json:"type"`
-	Project string `json:"project"`
-	Tool    string `json:"tool"`
-	Pattern string `json:"pattern"`
-	Title   string `json:"title"`
-	Check   string `json:"check"`
-}
-
 // mark is one line of a turn file. The prompt hook writes the start, cues appends the rest.
 type mark struct {
 	Start   int64  `json:"start,omitempty"`
-	Cued    string `json:"cued,omitempty"`
 	Failed  string `json:"failed,omitempty"`
 	Edited  string `json:"edited,omitempty"`
 	Elapsed int    `json:"elapsed,omitempty"`
@@ -55,7 +43,6 @@ type mark struct {
 type turn struct {
 	path    string
 	start   time.Time
-	cued    map[string]bool
 	failed  map[string]bool
 	edited  map[string]int
 	elapsed int
@@ -63,9 +50,9 @@ type turn struct {
 	added   []mark
 }
 
-// cues answers every tool call and stays quiet unless something applies: a rule whose trigger fits the call, a
-// failed call, a call that already failed this turn, a file edited over and over, a turn running long, or a message
-// the user sent while the turn ran.
+// cues answers every tool call and stays quiet unless something applies: a failed call, a call that already failed
+// this turn, a file edited over and over, a note left over the cap, a turn running long, or a message the user sent
+// while the turn ran.
 func cues(p payload) {
 	vault := vaultPath()
 	if vault == "" {
@@ -74,14 +61,6 @@ func cues(p payload) {
 
 	t := loadTurn(filepath.Join(vault, ".mem", "turns", p.SessionID+"+"+p.AgentID+".jsonl"))
 	text := toolText(p.ToolName, p.ToolInput)
-	places := placesOf(p.Cwd, text)
-	if path := editedFile(p); path != "" && inScope(vault, normalized(path)) {
-		// a note's file name is its title, free text that would fit any trigger, so only its folder and the kind of
-		// file count, and the edit happens in the vault whatever folder the session works in
-		text = p.ToolName + " " + filepath.Join(filepath.Dir(path), "*"+filepath.Ext(path))
-		places = []string{projectOf(vault)}
-	}
-	logCall(vault, p.ToolName, text, places)
 	var out []string
 
 	if p.HookEventName == "PostToolUseFailure" && !p.IsInterrupt {
@@ -101,7 +80,6 @@ func cues(p payload) {
 	if p.AgentID == "" && t.heardUser(p.TranscriptPath) {
 		out = append(out, heardCue)
 	}
-	out = append(out, t.rules(vault, p.ToolName, text, places)...)
 	t.save()
 
 	if len(out) == 0 {
@@ -113,7 +91,7 @@ func cues(p payload) {
 }
 
 func loadTurn(path string) *turn {
-	t := &turn{path: path, cued: map[string]bool{}, failed: map[string]bool{}, edited: map[string]int{}, heard: map[string]bool{}}
+	t := &turn{path: path, failed: map[string]bool{}, edited: map[string]int{}, heard: map[string]bool{}}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.start = time.Now()
@@ -129,8 +107,6 @@ func loadTurn(path string) *turn {
 		switch {
 		case m.Start != 0:
 			t.start = time.Unix(m.Start, 0)
-		case m.Cued != "":
-			t.cued[m.Cued] = true
 		case m.Failed != "":
 			t.failed[m.Failed] = true
 		case m.Edited != "":
@@ -243,74 +219,6 @@ func (t *turn) heardUser(transcript string) bool {
 		found = true
 	}
 	return found
-}
-
-// placesOf is the session's project and the folders the call's paths lead into, where a rule's scope has to reach.
-func placesOf(cwd, text string) []string {
-	places := []string{projectOf(cwd)}
-	for _, path := range pathsIn(text) {
-		places = append(places, projectOf(path))
-	}
-	return places
-}
-
-// logCall keeps the recent calls, so mem can show what a trigger would fit before it goes in. Past callsMax the
-// file moves to calls.old.jsonl, which keeps the log between one and two of those long.
-func logCall(vault, tool, text string, places []string) {
-	path := filepath.Join(vault, ".mem", "calls.jsonl")
-	if info, err := os.Stat(path); err == nil && info.Size() > callsMax {
-		os.Rename(path, filepath.Join(vault, ".mem", "calls.old.jsonl"))
-	}
-
-	line, _ := json.Marshal(map[string]any{"tool": tool, "text": text, "places": places})
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	f.Write(append(line, '\n'))
-}
-
-// rules brings up each rule whose trigger fits the call once per turn, where the rule's scope reaches one of the
-// call's places. The other notes' triggers bring their notes through mem recall.
-func (t *turn) rules(vault, tool, text string, places []string) []string {
-	var out []string
-	for _, tr := range loadTriggers(vault) {
-		if tr.Type != "rules" || t.cued[tr.Slug] || !tr.reaches(places) || !tr.fits(tool, text) {
-			continue
-		}
-
-		t.cued[tr.Slug] = true
-		t.added = append(t.added, mark{Cued: tr.Slug})
-		cue := "a rule fits this call, " + tr.Title
-		if tr.Check != "" {
-			cue += "\ncheck " + tr.Check
-		}
-		out = append(out, cue)
-	}
-	return out
-}
-
-func loadTriggers(vault string) []trigger {
-	raw, err := os.ReadFile(filepath.Join(vault, ".mem", "triggers.json"))
-	var triggers []trigger
-	if err != nil || json.Unmarshal(raw, &triggers) != nil {
-		return nil
-	}
-	return triggers
-}
-
-func (tr trigger) reaches(places []string) bool {
-	return slices.ContainsFunc(places, func(place string) bool { return inScope(tr.Project, place) })
-}
-
-func (tr trigger) fits(tool, text string) bool {
-	return matches("^(?:"+tr.Tool+")$", tool) && matches(tr.Pattern, text)
-}
-
-func matches(pattern, text string) bool {
-	re, err := regexp.Compile("(?i)" + pattern)
-	return err == nil && re.MatchString(text)
 }
 
 // overCap is the length of a note's body when an edit left it over the cap, else 0. mem save refuses a long body,

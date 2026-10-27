@@ -70,11 +70,11 @@ def in_scope(note_project, project):
     return (project.lower().rstrip("/") + "/").startswith(note_project.lower().rstrip("/") + "/")
 
 
-INCIDENT = re.compile(r"^- (\d{4}-\d{2}-\d{2}) (self|user)\b", re.M)
+INCIDENT = re.compile(r"^- (\d{4}-\d{2}-\d{2}) (self|user)\b(?: in (.+?),)?", re.M)
 
 
 def incidents(body):
-    """(date, who spotted it) for each incident line of a rule"""
+    """(date, who spotted it, where) for each incident line of a rule"""
     return INCIDENT.findall(body)
 
 
@@ -118,7 +118,6 @@ class Note:
     updated: str = field(default_factory=today)
     status: str = "active"
     tags: list = field(default_factory=list)
-    when: list = field(default_factory=list)
 
     @property
     def path(self):
@@ -155,7 +154,6 @@ def read_note(path):
         updated=str(meta.get("updated") or today()),
         status=str(meta.get("status") or "active"),
         tags=[str(t) for t in tags] if isinstance(tags, list) else [str(tags)],
-        when=[str(w) for w in meta.get("when") or []],
     )
 
 
@@ -170,8 +168,6 @@ def write_note(note):
         "status": note.status,
         "tags": note.tags,
     }
-    if note.when:
-        meta["when"] = note.when
     front = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True, default_flow_style=None)
     note.path.parent.mkdir(parents=True, exist_ok=True)
     note.path.write_text(f"---\n{front}---\n{note.body.strip()}\n", encoding="utf-8", newline="\n")

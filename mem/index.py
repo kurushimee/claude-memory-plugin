@@ -1,5 +1,5 @@
+import difflib
 import hashlib
-import json
 import re
 import sqlite3
 import time
@@ -16,7 +16,7 @@ RRF_K = 60
 STALE_DAYS = 90
 OLD_LEFTOVER_DAYS = 30
 DUPE_SIM = 0.92
-MENTION = "mention"
+NEAR_TITLE = 0.9
 STOP = set(
     """the and for with from into this that these those there their they them then than when where which what who why
     how are was were been being have has had does did done will would could should can may might must not nor but yet
@@ -125,8 +125,6 @@ def index(db):
     db.commit()
     if changed or gone or not (vault.mem_dir() / "scopes").exists():
         write_scopes(db)
-    if changed or gone or not (vault.mem_dir() / "triggers.json").exists():
-        write_triggers(db)
     if changed:
         embed_notes(db, changed)
     return changed, gone
@@ -136,23 +134,6 @@ def write_scopes(db):
     """the folders that have notes, read by mem-gate"""
     rows = db.execute("select distinct project from notes where status='active' and project!='global' order by project")
     (vault.mem_dir() / "scopes").write_text("".join(r[0] + "\n" for r in rows), encoding="utf-8", newline="\n")
-
-
-def write_triggers(db):
-    """each note's tool call triggers with its type, title and a rule's check, read by mem-gate"""
-    out = []
-    for r in db.execute("select path, slug, type, project, title from notes where status='active'"):
-        note = vault.read_note(r["path"])
-        check = vault.section(note.body, "check") if r["type"] == "rules" else ""
-        for when in note.when:
-            tool, _, pattern = when.partition(":")
-            out.append({"slug": r["slug"], "type": r["type"], "project": r["project"], "tool": tool, "pattern": pattern, "title": r["title"], "check": check})
-    (vault.mem_dir() / "triggers.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-
-
-def triggers():
-    path = vault.mem_dir() / "triggers.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
 
 
 def upsert(db, note, digest, mtime):
@@ -297,29 +278,34 @@ def body_of(db, slug):
     return row[0] if row else ""
 
 
-def session_slugs(db, session, agent, mentions):
-    rows = db.execute(
-        "select slug from injected where session_id=? and coalesce(agent_id,'')=? and compacted_at is null and (source=?)=?",
-        (session, agent or "", MENTION, mentions),
-    )
-    return {r[0] for r in rows}
+def named(db, name):
+    """the note a slug or a title names. a title copied out of the index with a small slip still finds its note"""
+    name = " ".join(name.split())
+    # a sync conflict's copy shares its note's title under a longer slug
+    row = db.execute(
+        "select * from notes where slug=? or lower(title)=lower(?) order by slug=? desc, length(slug)", (name, name, name)
+    ).fetchone()
+    if row:
+        return row
+    titles = {r["title"].lower(): r for r in db.execute("select * from notes order by length(slug) desc")}
+    near = difflib.get_close_matches(name.lower(), titles, n=1, cutoff=NEAR_TITLE)
+    return titles[near[0]] if near else None
 
 
 def injected_slugs(db, session, agent):
-    """notes whose body this session already got"""
-    return session_slugs(db, session, agent, mentions=False)
-
-
-def mentioned_slugs(db, session, agent):
-    """notes this session got as a title only"""
-    return session_slugs(db, session, agent, mentions=True)
+    """notes whose body this session already got by itself"""
+    rows = db.execute(
+        "select slug from injected where session_id=? and coalesce(agent_id,'')=? and compacted_at is null",
+        (session, agent or ""),
+    )
+    return {r[0] for r in rows}
 
 
 def injected_rows(db, session):
     return db.execute(
         """select i.slug, i.source, max(i.at) as at, n.title, n.path from injected i join notes n using(slug)
-           where i.session_id=? and i.source!=? group by i.slug order by at desc""",
-        (session, MENTION),
+           where i.session_id=? group by i.slug order by at desc""",
+        (session,),
     ).fetchall()
 
 
@@ -330,8 +316,7 @@ def record_injected(db, session, agent, slugs, source):
             "insert into injected(session_id, agent_id, slug, source, at) values(?,?,?,?,?)",
             (session, agent or None, slug, source, now),
         )
-        if source != MENTION:
-            db.execute("update notes set injected=injected+1, last_injected=? where slug=?", (now, slug))
+        db.execute("update notes set injected=injected+1, last_injected=? where slug=?", (now, slug))
     db.commit()
 
 
@@ -374,9 +359,9 @@ def stamp_compacted(db, session, agent):
 def before_compaction(db, session, agent):
     return db.execute(
         """select distinct i.slug, n.title from injected i join notes n using(slug)
-           where i.session_id=? and coalesce(i.agent_id,'')=? and n.status='active' and i.source!=?
+           where i.session_id=? and coalesce(i.agent_id,'')=? and n.status='active'
            order by i.at desc""",
-        (session, agent or "", MENTION),
+        (session, agent or ""),
     ).fetchall()
 
 
@@ -439,16 +424,17 @@ def errors_since_pass():
 
 
 def lessons_week(db):
-    """the incidents logged in the last week, how many the user had to point out, and how many hit a rule that
-    already had one, the two numbers that should fall to zero"""
+    """the incidents logged in the last week, how many the user had to point out, how many hit a rule that already
+    had one, and how many of those the user had to point out, the numbers that should fall to zero"""
     week = []
     for r in db.execute("select slug from notes where type='rules' and status='active'"):
         found = vault.incidents(body_of(db, r[0]))
-        week += [(who, i > 0) for i, (day, who) in enumerate(found) if days_ago(day) <= 7]
+        week += [(who, i > 0) for i, (day, who, _) in enumerate(found) if days_ago(day) <= 7]
     return {
         "lessons_week": len(week),
         "lessons_by_user": sum(1 for who, _ in week if who == "user"),
         "lessons_repeats": sum(1 for _, repeat in week if repeat),
+        "lessons_missed": sum(1 for who, repeat in week if who == "user" and repeat),
     }
 
 
