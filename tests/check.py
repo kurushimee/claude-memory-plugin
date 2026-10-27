@@ -101,6 +101,11 @@ assert index.embed(["check"]) is not None, "embedder unavailable, the vector che
 assert db.execute("select count(*) from vec").fetchone()[0] == 6
 
 assert vault.project_of(str(elsewhere / "src")) == (elsewhere / "src").as_posix() and vault.project_of(str(Path.home())) == "global"
+tree = tmp / "repo" / ".claude" / "worktrees" / "w1"
+tree.mkdir(parents=True)
+(tmp / "repo" / ".git").mkdir()
+(tree / ".git").write_text(f"gitdir: {(tmp / 'repo').as_posix()}/.git/worktrees/w1\n", encoding="utf-8")
+assert vault.project_of(str(tree / "src")) == (tmp / "repo").as_posix(), "a worktree got its own project"
 assert vault.in_scope(elsewhere.as_posix(), (elsewhere / "src").as_posix()) and not vault.in_scope(elsewhere.as_posix(), elsewhere.as_posix() + "2")
 assert list(vault.paths_in("cd /f/x && cat src/a/b https://e.com/a/b")) == ["F:/x"]
 
@@ -259,6 +264,10 @@ assert gate({**gated, "agent_id": "a1"}) == "", "a subagent's call brought notes
 assert away.title in gate(gated), "the gate kept back a folder entry"
 assert gate(gated) == "", "the gate let a reached folder through"
 assert gate({**gated, "tool_input": {"file_path": f"{project}/facts/x.md"}}) == ""
+outside = tmp / "wt2"
+outside.mkdir()
+(outside / ".git").write_text(f"gitdir: {elsewhere.as_posix()}/.git/worktrees/wt2\n", encoding="utf-8")
+assert gate({**gated, "session_id": "g2", "cwd": str(outside)}) == "", "a worktree session got its own repo's notes as another folder"
 
 assert cli.parse(["save", "--type", "facts", "--title", "x"]).project == "global", "a save with no project landed in one"
 

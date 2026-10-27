@@ -21,6 +21,7 @@ var (
 	toolKeys = []string{"file_path", "path", "pattern", "command", "glob", "notebook_path"}
 	memCall  = regexp.MustCompile(`\bmem(\.exe)? |memory_`)
 	pathAt   = regexp.MustCompile("^(?:[A-Za-z]:[\\\\/]|/[a-zA-Z]/)[^\\s\\v\\pZ\"'`|;&<>()]*")
+	worktree = regexp.MustCompile(`^gitdir: (.+)/\.git/worktrees/[^/]+\s*$`)
 )
 
 type payload struct {
@@ -160,8 +161,8 @@ func projectOf(dir string) string {
 
 	p := filepath.Clean(dir)
 	for d := p; ; d = filepath.Dir(d) {
-		if _, err := os.Stat(filepath.Join(d, ".git")); err == nil {
-			return filepath.ToSlash(d)
+		if info, err := os.Stat(filepath.Join(d, ".git")); err == nil {
+			return filepath.ToSlash(mainCheckout(d, info))
 		}
 		if filepath.Dir(d) == d {
 			break
@@ -173,6 +174,22 @@ func projectOf(dir string) string {
 		return "global"
 	}
 	return filepath.ToSlash(p)
+}
+
+// a worktree's notes belong to its main checkout, since the worktree goes once its work is merged
+func mainCheckout(root string, git os.FileInfo) string {
+	if git.IsDir() {
+		return root
+	}
+
+	text, err := os.ReadFile(filepath.Join(root, ".git"))
+	if err != nil {
+		return root
+	}
+	if m := worktree.FindSubmatch(text); m != nil {
+		return filepath.Clean(string(m[1]))
+	}
+	return root
 }
 
 func inScope(noteProject, project string) bool {

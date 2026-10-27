@@ -50,13 +50,20 @@ def slugify(title):
     return slug or "note"
 
 
+WORKTREE = re.compile(r"^gitdir: (.+)/\.git/worktrees/[^/]+\s*$")
+
+
 def project_of(cwd):
-    """the git root above cwd, else cwd itself"""
+    """the git root above cwd, the main checkout's for a worktree since the worktree goes once its work is merged,
+    else cwd itself"""
     if not cwd or "scratch-workspaces" in cwd:
         return "global"
     p = Path(cwd)
     for d in (p, *p.parents):
-        if (d / ".git").exists():
+        git = d / ".git"
+        if git.is_file() and (main := WORKTREE.match(git.read_text(encoding="utf-8", errors="replace"))):
+            return Path(main.group(1)).as_posix()
+        if git.exists():
             return d.as_posix()
     if p == Path.home() or p.parent == p:
         return "global"
