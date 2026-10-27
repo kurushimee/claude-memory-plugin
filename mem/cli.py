@@ -259,8 +259,9 @@ def latest_sessions():
 
 
 def session_report(db, path):
-    """how many turns opened memory before their first work call, and how many hand backs, a wrap_up, a question
-    or a plan, had a rule opened after the last work call before them"""
+    """how many turns opened memory by the message of their first work call, and how many hand backs, a wrap_up, a
+    question or a plan, had a rule opened from the message of the last work call before them up to the one before
+    theirs, since a call can't see what another call of its own message brings"""
     is_rule = {}
 
     def opens_rule(call):
@@ -275,19 +276,23 @@ def session_report(db, path):
     def aside(call):
         return call[0].endswith(HANDBACK + ASIDE) or transcript.reads_memory(*call)
 
+    def works(message):
+        return not all(map(aside, message))
+
     worked = started = backs = checked = 0
-    for calls in transcript.turns(path):
-        work = [i for i, call in enumerate(calls) if not aside(call)]
+    for messages in transcript.turns(path):
+        work = [i for i, message in enumerate(messages) if works(message)]
         if not work:
             continue
         worked += 1
-        started += any(transcript.reads_memory(*call) for call in calls[: work[0]])
-        last = -1
-        for i, call in enumerate(calls):
-            if call[0].endswith(HANDBACK):
-                backs += 1
-                checked += any(map(opens_rule, calls[last + 1 : i]))
-            elif not aside(call):
+        started += any(transcript.reads_memory(*call) for message in messages[: work[0] + 1] for call in message)
+        last = 0
+        for i, message in enumerate(messages):
+            handed = sum(call[0].endswith(HANDBACK) for call in message)
+            backs += handed
+            if handed and any(opens_rule(call) for before in messages[last:i] for call in before):
+                checked += handed
+            if works(message):
                 last = i
     return {"session": path.stem, "folder": path.parent.name, "turns": worked, "started": started, "handbacks": backs, "checked": checked}
 
@@ -355,9 +360,9 @@ def render_check(r):
         out.append("bodies over the cap " + ", ".join(h["long_bodies"]))
     if r["sessions"]:
         out.append(
-            "latest sessions, the turns that opened memory before their first work call and the hand backs with a rule "
-            "opened after the last work call. a miss is a turn or a hand back the way of working in system/working.md "
-            "didn't reach"
+            "latest sessions, the turns that opened memory by their first work call and the hand backs with a rule "
+            "opened between the last work call and them. a miss is a turn or a hand back the way of working in "
+            "system/working.md didn't reach"
         )
         out += [
             f"{s['folder']} {s['session'][:8]} started {s['started']}/{s['turns']}, rules before hand back {s['checked']}/{s['handbacks']}"

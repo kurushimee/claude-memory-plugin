@@ -338,6 +338,13 @@ def tool_call(name, **tool_input):
     return {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": name, "input": tool_input}]}}
 
 
+def one_message(message_id, *calls):
+    """calls made together, which the app writes as an entry each under the message's id"""
+    for call in calls:
+        call["message"]["id"] = message_id
+    return calls
+
+
 show = "mcp__plugin_memory_memory__memory_show"
 spoken = write_transcript(tmp / "spoken.jsonl", typed("make the brief fit"), said("on it"), tool_call(show, names=[ghidra.title]), heard, typed("and keep the rules"))
 after = context(hooks.brief({**start, "source": "compact", "transcript_path": spoken}))
@@ -383,14 +390,18 @@ write_transcript(
     tool_call("mcp__ccd_turn__update_plan", advance=True), tool_call(show, slug=fb.slug), tool_call("mcp__ccd_turn__wrap_up", recap="done"),
     typed("and the docs"), tool_call("Edit", file_path="x"), tool_call("AskUserQuestion", questions=[]),
     tool_call("Bash", command=f'mem show "{ghidra.title}"'), tool_call("ExitPlanMode"),
+    {"type": "user", "turnOrigin": "sdk", "message": {"role": "user", "content": "check the docs"}},
+    *one_message("msg_1", tool_call("Bash", command="make docs"), tool_call(show, names=[ghidra.slug])),
+    {"type": "user", "turnOrigin": "task_notification", "message": {"role": "user", "content": "<task-notification>"}},
+    *one_message("msg_2", tool_call("mcp__ccd_turn__wrap_up", recap="done"), tool_call(show, slug=fb.slug)),
 )
 report = cli.check_report()
 assert report["notes"] == report["indexed"] == 6 and report["health"]["conflicts"] == 1, (report["health"], report["log_tail"])
-assert report["sessions"] == [{"session": "s2", "folder": "F--x", "turns": 2, "started": 1, "handbacks": 3, "checked": 1}], report["sessions"]
-assert "F--x s2 started 1/2, rules before hand back 1/3" in cli.render_check(report)
+assert report["sessions"] == [{"session": "s2", "folder": "F--x", "turns": 3, "started": 2, "handbacks": 4, "checked": 1}], report["sessions"]
+assert "F--x s2 started 2/3, rules before hand back 1/4" in cli.render_check(report)
 pane = cli.pane("s2", project)
 assert set(pane) == {"project", "vault", "health", "leftovers", "opened", "injected", "counts"} and pane["counts"]["recalled"] == 1
-assert [n["slug"] for n in pane["opened"]] == [ghidra.slug, fb.slug] and pane["counts"]["opened"] == 2, pane["opened"]
+assert [n["slug"] for n in pane["opened"]] == [fb.slug, ghidra.slug] and pane["counts"]["opened"] == 2, pane["opened"]
 assert pane["health"]["lessons_by_user"] == 3, pane["health"]
 json.dumps(pane)
 

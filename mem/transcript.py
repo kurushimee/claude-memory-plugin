@@ -110,18 +110,31 @@ def user_messages(path):
     return [text for e in whole(path, '"kind":"human"') if (text := REMINDER.sub("", said(e)).strip())]
 
 
+def prompted(entry):
+    """a prompt the user typed, or one another session or the app sent, not a background task's notification"""
+    return typed(entry) or entry.get("type") == "user" and entry.get("turnOrigin") == "sdk"
+
+
 def turns(path):
-    """the tool calls of each turn the user started by typing, as (name, input) in order"""
-    out = []
-    for entry in whole(path, '"kind":"human"', '"tool_use"'):
+    """the tool calls of each turn a prompt started, as (name, input) grouped by the assistant message that made
+    them, since the calls of one message run together and the app writes each as its own entry"""
+    out, last = [], None
+    for entry in whole(path, '"kind":"human"', '"turnOrigin":"sdk"', '"tool_use"'):
         if entry.get("isSidechain"):
             continue
-        if typed(entry):
+        if prompted(entry):
             out.append([])
             continue
-        content = (entry.get("message") or {}).get("content")
-        if out and entry.get("type") == "assistant" and isinstance(content, list):
-            out[-1] += [(c.get("name", ""), c.get("input") or {}) for c in content if c.get("type") == "tool_use"]
+        message = entry.get("message") or {}
+        content = message.get("content")
+        if not out or entry.get("type") != "assistant" or not isinstance(content, list):
+            continue
+        calls = [(c.get("name", ""), c.get("input") or {}) for c in content if c.get("type") == "tool_use"]
+        if out[-1] and message.get("id") and message.get("id") == last:
+            out[-1][-1] += calls
+        elif calls:
+            out[-1].append(calls)
+        last = message.get("id")
     return out
 
 
@@ -149,4 +162,4 @@ def reads_memory(name, tool_input):
 
 def opened(path):
     """every note the agent opened this session, by the names it gave, oldest first"""
-    return [n for turn in turns(path) for call in turn for n in shown(*call)]
+    return [n for turn in turns(path) for message in turn for call in message for n in shown(*call)]
