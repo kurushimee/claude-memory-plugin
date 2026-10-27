@@ -31,5 +31,6 @@ for label in ("needed", "related", "unrelated"):
     got = sorted((r for r in rows if r[1] == label), reverse=True)
     bodies = sum(s >= judge.BODY_GATE for s, *_ in got)
     print(f"{label} {len(got)}, {bodies} at the gate")
-    for score, _, case_id, slug in got[:8]:
+    # each unrelated pair at the gate is a miss to look at, so none of them get cut
+    for score, _, case_id, slug in got[: max(8, bodies) if label == "unrelated" else 8]:
         print(f"  {score:.3f} {case_id} {slug}")

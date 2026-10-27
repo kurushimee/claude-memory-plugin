@@ -146,7 +146,11 @@ def rerank(port, query, docs, end):
     results = json.load(urllib.request.urlopen(req, timeout=max(1, end - time.monotonic())))["results"]
     out = [0.0] * len(docs)
     for item in results:
-        out[item["index"]] = item["relevance_score"]
+        score = item["relevance_score"]
+        if score is None:
+            # llama-server writes a NaN score as null
+            vault.log(f"judge gave doc {item['index'] + 1} of {len(docs)} a NaN score, {len(docs[item['index']])} chars")
+        out[item["index"]] = score or 0.0
     return out
 
 
