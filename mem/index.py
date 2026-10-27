@@ -316,6 +316,13 @@ def record_injected(db, session, agent, slugs, source):
             "insert into injected(session_id, agent_id, slug, source, at) values(?,?,?,?,?)",
             (session, agent or None, slug, source, now),
         )
+    mark_used(db, slugs)
+
+
+def mark_used(db, slugs):
+    """a note that reached a session, by itself or opened, never shows up as a stale candidate"""
+    now = datetime.now().isoformat(timespec="seconds")
+    for slug in slugs:
         db.execute("update notes set injected=injected+1, last_injected=? where slug=?", (now, slug))
     db.commit()
 

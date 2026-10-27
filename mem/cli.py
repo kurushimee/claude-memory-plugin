@@ -151,15 +151,15 @@ def run(args):
 
 def show(names):
     """the full notes the slugs or titles name, each under its slug and path"""
-    db = index.connect()
+    db = index.connect(vec=True)
     index.index(db)
-    out = []
+    rows = []
     for name in names:
-        row = index.named(db, name)
-        if not row:
+        if not (row := index.named(db, name)):
             raise vault.Refused(f"no note named {name}, memory_search finds notes by meaning")
-        out.append(f"# {row['slug']} at {row['path']}\n{Path(row['path']).read_text(encoding='utf-8')}")
-    return "\n\n".join(out)
+        rows.append(row)
+    index.mark_used(db, [r["slug"] for r in rows])
+    return "\n\n".join(f"# {r['slug']} at {r['path']}\n{Path(r['path']).read_text(encoding='utf-8')}" for r in rows)
 
 
 def save_note(type, title, body, tags, links, project):
